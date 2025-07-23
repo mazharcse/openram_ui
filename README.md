@@ -27,13 +27,15 @@ A PySide6-based desktop application for loading, editing, and running OpenRAM co
 1.  **Clone the project**:
 
     ```bash
-    git clone https://github.com/yourname/openram-ui.git
-    cd openram-ui
+    git clone https://github.com/mazharcse/openram_ui.git
+    cd openram_ui
     ```
 
 2.  **Install dependencies**:
 
     ```bash
+    python3 -m venv venv
+    source venv/bin/activate
     pip install -r requirements.txt
     ```
 
@@ -80,8 +82,10 @@ use_simulation = False
 
 ## 📌 Next Steps (Planned Features)
 
--   Upload and validate PDK files
--   Save/load user sessions
+-   Run OpenRAM
+-   View GDS output
 -   Advanced settings editor
+-   Upload and validate PDK files
+
 
 
