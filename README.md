@@ -62,7 +62,7 @@ openram_ui/
 
 ---
 
-## 🧩 Sample Config Format (`default.py`)
+## 🧩 Sample Config Format (`personal_config.py`)
 
 ```python
 word_size = 4
