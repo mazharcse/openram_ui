@@ -8,6 +8,7 @@ A PySide6-based desktop application for loading, editing, and running OpenRAM co
 
 -   **Load & Edit:** Load any OpenRAM-compatible Python config file and edit parameters through a user-friendly UI.
 -   **Save:** Save modified configurations to new files.
+-   **Select PDK:** Select your own PDK.
 -   **Run OpenRAM:** Execute OpenRAM directly from the GUI and view the output logs.
 -   **View GDS:** Open generated GDS files in an external viewer like KLayout.
 -   **Modular Design:** The UI and application logic are separated for better maintainability.
@@ -86,6 +87,7 @@ use_simulation = False
 -   View GDS output
 -   Advanced settings editor
 -   Upload and validate PDK files
+-   PDK selection
 
 
 
