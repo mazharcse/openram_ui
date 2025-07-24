@@ -13,9 +13,10 @@ class MainWindow(QMainWindow):
         
         # --- Connect signals to slots ---
         self.ui.load_button.clicked.connect(self.controller.load_config)
-        self.ui.save_button.clicked.connect(self.controller.save_config)
+        
         self.ui.run_button.clicked.connect(self.controller.run_openram)
         self.ui.view_button.clicked.connect(self.controller.view_gds)
+        self.ui.advanced_settings_button.clicked.connect(self.controller.show_advanced_settings)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

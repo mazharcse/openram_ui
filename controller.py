@@ -4,6 +4,8 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 from PySide6.QtCore import QCoreApplication
 from config_loader import load_config
 from config_editor import ConfigEditor
+from advanced_config_editor import AdvancedConfigEditor
+from constants import MANDATORY_CONFIG_KEYS
 
 class Controller:
     def __init__(self, ui):
@@ -26,7 +28,7 @@ class Controller:
             self.ui.editor.deleteLater()
             self.ui.editor = None
 
-        self.ui.editor = ConfigEditor(self.config)
+        self.ui.editor = ConfigEditor(self.config_path)
         self.ui.editor.setMinimumWidth(400)
         self.ui.scroll_area.setWidget(self.ui.editor)
 
@@ -34,7 +36,28 @@ class Controller:
         if not self.ui.editor:
             QMessageBox.warning(None, "No Config", "Nothing to save.")
             return
-        self.ui.editor.save_config()
+
+        current_config = self.ui.editor.get_config()
+        missing_fields = [field for field in MANDATORY_CONFIG_KEYS if not current_config.get(field)]
+
+        if missing_fields:
+            reply = QMessageBox.warning(
+                None,
+                "Missing Mandatory Fields",
+                f"The following mandatory fields are empty: {', '.join(missing_fields)}.\n\nDo you want to save anyway?",
+                QMessageBox.Save | QMessageBox.Cancel,
+                QMessageBox.Cancel
+            )
+            if reply == QMessageBox.Cancel:
+                return
+
+        path, _ = QFileDialog.getSaveFileName(
+            None, "Save Config File", "", "Python Files (*.py)"
+        )
+        if not path:
+            return
+
+        self.ui.editor.save_config(path)
 
     def run_openram(self):
         pass
@@ -66,3 +89,13 @@ class Controller:
     def view_gds(self):
         # subprocess.Popen(["klayout", "test.gds"])
         pass
+
+    def show_advanced_settings(self):
+        if self.ui.editor:
+            self.ui.scroll_area.takeWidget()
+            self.ui.editor.deleteLater()
+            self.ui.editor = None
+
+        self.ui.editor = AdvancedConfigEditor()
+        self.ui.editor.setMinimumWidth(400)
+        self.ui.scroll_area.setWidget(self.ui.editor)
