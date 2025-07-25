@@ -27,8 +27,8 @@ load_scales = ""
 slew_scales = ""
 
 # Size parameters must be specified by user in config file.
-# num_words = 0
-# word_size = 0
+num_words = 0
+word_size = 0
 # You can manually specify banks, but it is better to auto-detect it.
 num_banks = 1
 words_per_row = None
