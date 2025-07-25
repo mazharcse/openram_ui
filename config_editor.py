@@ -6,7 +6,7 @@ from config_loader import _load_config_file
 from constants import DEFAULT_CONFIG_FILE, ADVANCED_CONFIG_FILE, MANDATORY_CONFIG_KEYS
 
 class ConfigEditor(QWidget):
-    def __init__(self, personal_config_path, default_config_path=DEFAULT_CONFIG_FILE):
+    def __init__(self, personal_config_path=None, default_config_path=DEFAULT_CONFIG_FILE):
         super().__init__()
         self.personal_config_path = personal_config_path
         self.default_config = _load_config_file(default_config_path)
@@ -23,12 +23,13 @@ class ConfigEditor(QWidget):
         self.form = QFormLayout()
         self.setLayout(self.layout)
 
-        # Display personal config fields first
-        for key, value in self.personal_config.items():
-            field = QLineEdit(str(value))
-            self.fields[key] = field
-            self.form.addRow(key, field)
-            field.textChanged.connect(self.set_modified)
+        if self.personal_config_path:
+            # Display personal config fields first
+            for key, value in self.personal_config.items():
+                field = QLineEdit(str(value))
+                self.fields[key] = field
+                self.form.addRow(key, field)
+                field.textChanged.connect(self.set_modified)
 
         # Display default config fields if not in personal config
         for key, value in self.default_config.items():

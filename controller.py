@@ -60,6 +60,18 @@ class Controller:
             self.ui.editor = ConfigEditor(self.config_path)
             self.ui.editor.setMinimumWidth(400)
             self.ui.scroll_area.setWidget(self.ui.editor)
+            
+    def create_new_config(self):
+        # file_path, _ = QFileDialog.getOpenFileName(self.ui, "Load Config", "", "Python Files (*.py)")
+        # if file_path:
+        #     self.config_path = file_path
+        #     if self.ui.editor:
+        #         self.ui.scroll_area.takeWidget()
+        #         self.ui.editor.deleteLater()
+        #         self.ui.editor = None
+        self.ui.editor = ConfigEditor(None)  # Create a new empty config editor
+        self.ui.editor.setMinimumWidth(400)
+        self.ui.scroll_area.setWidget(self.ui.editor)
 
     def save_config(self):
         if not self.ui.editor:

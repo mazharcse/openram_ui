@@ -27,12 +27,14 @@ class Ui_MainWindow(object):
         self.sidebar.setSpacing(10)
 
         self.home_button = QPushButton("🏠 Home")
+        self.create_button = QPushButton("➕ Create Config")
         self.load_button = QPushButton("📂 Load Config")
         self.run_button = QPushButton("▶ Run OpenRAM")
         self.view_button = QPushButton("🧿 View GDS")
         self.advanced_settings_button = QPushButton("⚙️ Advanced Settings")
 
         self.sidebar.addWidget(self.home_button)
+        self.sidebar.addWidget(self.create_button)
         self.sidebar.addWidget(self.load_button)
         self.sidebar.addWidget(self.run_button)
         self.sidebar.addWidget(self.view_button)
@@ -82,6 +84,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         
         # Connect signals to controller slots
         self.home_button.clicked.connect(self.controller.show_home_screen)
+        self.create_button.clicked.connect(self.controller.create_new_config)
         self.load_button.clicked.connect(self.controller.load_config)
         self.run_button.clicked.connect(self.controller.run_openram)
         self.view_button.clicked.connect(self.controller.view_gds)

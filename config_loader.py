@@ -2,10 +2,10 @@
 import importlib.util
 import os
 
-def _load_config_file(path):
+def _load_config_file(path=None):
     """Dynamically loads a Python config file into a dictionary."""
     config = {}
-    if not os.path.exists(path):
+    if path is None or not os.path.exists(path):
         return config
 
     # Get the absolute path to the config file
@@ -20,7 +20,7 @@ def _load_config_file(path):
             config[key] = getattr(module, key)
     return config
 
-def load_config(personal_config_path, default_config_path="config/default.py"):
+def load_config(personal_config_path=None, default_config_path="config/default.py"):
     """
     Loads the default and personal configurations and merges them.
     Personal config values override default values.
