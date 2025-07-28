@@ -173,9 +173,11 @@ class Controller:
 
         if gds_file:
             command = f"klayout {gds_file}"
-            # For a fire-and-forget process like klayout, a detached process is fine.
-            # We use QProcess here for consistency, but could also use subprocess.
-            QProcess.startDetached("bash", ["-c", command])
+            temp_script_path = self._create_temp_script(command)
+            if temp_script_path:
+                # Use startDetached for a "fire-and-forget" GUI application like klayout.
+                # The temporary script will not be deleted by this process, which is acceptable.
+                QProcess.startDetached("bash", [temp_script_path])
 
     def show_advanced_settings(self):
         if self.ui.editor:
