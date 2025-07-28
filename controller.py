@@ -116,7 +116,7 @@ class Controller:
         QCoreApplication.processEvents()
 
         sram_compiler_script = os.path.join(_load_config_file(ADVANCED_CONFIG_FILE).get("openram_path"), "sram_compiler.py")
-        command_to_run = f"python3 {sram_compiler_script} {self.config_path}"
+        command_to_run = f"python3 -u {sram_compiler_script} {self.config_path}"
 
         self.temp_script_path = self._create_temp_script(command_to_run)
         if not self.temp_script_path:
