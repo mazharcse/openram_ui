@@ -3,7 +3,8 @@ import subprocess
 import glob
 import tempfile
 from PySide6.QtWidgets import QMessageBox, QTextEdit, QInputDialog
-from PySide6.QtCore import QCoreApplication
+from PySide6.QtCore import QCoreApplication, QProcess
+
 from config_loader import _load_config_file
 from config_editor import ConfigEditor
 from advanced_config_editor import AdvancedConfigEditor
@@ -15,40 +16,36 @@ class Controller:
         self.ui = ui
         self.config = {}
         self.config_path = None
+        self.process = None
+        self.temp_script_path = None
 
-    import tempfile
-
-    def _run_command_in_openram_env(self, command_to_run, capture_output=True):
+    def _create_temp_script(self, command_to_run):
+        """Creates a temporary shell script to run a command in the OpenRAM environment."""
         advanced_config = _load_config_file(ADVANCED_CONFIG_FILE)
         openram_path = advanced_config.get("openram_path")
 
         if not openram_path:
             QMessageBox.critical(self.ui, "Error", "OpenRAM path not set in advanced settings.")
-            return None, None
+            return None
 
         openram_activate_script = os.path.join(openram_path, "openram_env", "bin", "activate")
         miniconda_activate_script = os.path.join(openram_path, "miniconda", "bin", "activate")
         setpaths_script = os.path.join(openram_path, "setpaths.sh")
 
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.sh') as f:
-            f.write(f"#!/bin/bash\n")
-            f.write(f"source {openram_activate_script}\n")
-            f.write(f"source {miniconda_activate_script}\n")
-            f.write(f"source {setpaths_script}\n")
-            f.write(f"{command_to_run}\n")
-            temp_script_path = f.name
-        
-        os.chmod(temp_script_path, 0o755)
-
-        self.ui.log_output.append(f"Executing command: {command_to_run}\n")
-        QCoreApplication.processEvents()
-
-        if capture_output:
-            process = subprocess.Popen([temp_script_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        else:
-            process = subprocess.Popen([temp_script_path])
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.sh', encoding='utf-8') as f:
+                f.write("#!/bin/bash\n")
+                f.write(f"source {openram_activate_script}\n")
+                f.write(f"source {miniconda_activate_script}\n")
+                f.write(f"source {setpaths_script}\n")
+                f.write(f"{command_to_run}\n")
+                temp_script_path = f.name
             
-        return process, temp_script_path
+            os.chmod(temp_script_path, 0o755)
+            return temp_script_path
+        except Exception as e:
+            QMessageBox.critical(self.ui, "Error", f"Failed to create temporary script: {e}")
+            return None
 
     def load_config(self):
         dialog = LoadConfigDialog()
@@ -97,17 +94,16 @@ class Controller:
                 path = os.path.join(USERS_CONFIG_DIR, f"{config_name}.py")
                 self.ui.editor.save_config(path)
 
-
     def run_openram(self):
+        if self.process and self.process.state() != QProcess.NotRunning:
+            QMessageBox.warning(self.ui, "Warning", "An OpenRAM process is already running.")
+            return
+
         if not self.config_path:
             QMessageBox.warning(self.ui, "Warning", "Please load a config file first.")
             return
 
-        if not self.ui.editor or not hasattr(self.ui.editor, 'get_config'):
-            current_config = _load_config_file(self.config_path)
-        else:
-            current_config = self.ui.editor.get_config()
-
+        current_config = _load_config_file(self.config_path)
         missing_fields = [field for field in MANDATORY_CONFIG_KEYS if not current_config.get(field)]
         if missing_fields:
             QMessageBox.critical(self.ui, "Error", f"Missing mandatory fields: {', '.join(missing_fields)}")
@@ -119,34 +115,39 @@ class Controller:
         self.ui.log_output.append("Running OpenRAM... please wait, this may take a while.")
         QCoreApplication.processEvents()
 
-        #todo run in thread
         sram_compiler_script = os.path.join(_load_config_file(ADVANCED_CONFIG_FILE).get("openram_path"), "sram_compiler.py")
-        command_to_run = f"python {sram_compiler_script} {self.config_path}"
+        command_to_run = f"python3 {sram_compiler_script} {self.config_path}"
 
-        process, command = self._run_command_in_openram_env(command_to_run, capture_output=True)
-
-        if process is None:
+        self.temp_script_path = self._create_temp_script(command_to_run)
+        if not self.temp_script_path:
             self.ui.run_button.setEnabled(True)
             self.ui.run_button.setText("Run OpenRAM")
             return
 
-        while True:
-            output = process.stdout.readline().decode()
-            if output == '' and process.poll() is not None:
-                break
-            if output:
-                self.ui.log_output.append(output.strip())
-                QCoreApplication.processEvents()
+        self.process = QProcess()
+        self.process.setProcessChannelMode(QProcess.MergedChannels)
+        self.process.readyReadStandardOutput.connect(self.on_output_ready)
+        self.process.finished.connect(self.on_run_finished)
         
-        rc = process.poll()
-        if rc != 0:
-            self.ui.log_output.append(f"OpenRAM failed with exit code {rc}")
-            self.ui.log_output.append(process.stderr.read().decode())
-        else:
-            self.ui.log_output.append("OpenRAM process completed successfully.")
+        self.process.start("bash", [self.temp_script_path])
 
+    def on_output_ready(self):
+        output = self.process.readAllStandardOutput().data().decode(errors='replace')
+        self.ui.log_output.append(output.strip())
+
+    def on_run_finished(self, exitCode, exitStatus):
+        self.ui.log_output.append(f"\nOpenRAM process finished.")
+        self.ui.log_output.append(f"Exit Code: {exitCode}")
+        self.ui.log_output.append(f"Exit Status: {'Normal' if exitStatus == QProcess.NormalExit else 'Crash'}")
+        
         self.ui.run_button.setEnabled(True)
         self.ui.run_button.setText("Run OpenRAM")
+
+        if self.temp_script_path and os.path.exists(self.temp_script_path):
+            os.unlink(self.temp_script_path)
+            self.temp_script_path = None
+        
+        self.process = None
 
     def view_gds(self):
         if not self.config_path:
@@ -155,25 +156,26 @@ class Controller:
 
         config = _load_config_file(self.config_path)
         output_path = config.get("output_path", ".")
-
         gds_files = glob.glob(os.path.join(output_path, "*.gds"))
 
         if not gds_files:
             QMessageBox.warning(self.ui, "Warning", f"No GDS file found in {output_path}")
             return
 
-        gds_file = None,
+        gds_file = None
         if len(gds_files) == 1:
             gds_file = gds_files[0]
         else:
             file_names = [os.path.basename(f) for f in gds_files]
-            file_name, ok = QInputDialog.getItem(self.ui, "Select GDS File", "Multiple GDS files found. Please select one to open:", file_names, 0, False)
+            file_name, ok = QInputDialog.getItem(self.ui, "Select GDS File", "Multiple GDS files found...", file_names, 0, False)
             if ok and file_name:
                 gds_file = os.path.join(output_path, file_name)
 
         if gds_file:
             command = f"klayout {gds_file}"
-            process, _ = self._run_command_in_openram_env(command, capture_output=False)
+            # For a fire-and-forget process like klayout, a detached process is fine.
+            # We use QProcess here for consistency, but could also use subprocess.
+            QProcess.startDetached("bash", ["-c", command])
 
     def show_advanced_settings(self):
         if self.ui.editor:
@@ -193,9 +195,8 @@ class Controller:
 
         home_text_edit = QTextEdit()
         home_text_edit.setReadOnly(True)
-
         home_content = HOME_SCREEN_MESSAGE
-
+        
         advanced_config_content = ""
         try:
             advanced_config = _load_config_file(ADVANCED_CONFIG_FILE)
