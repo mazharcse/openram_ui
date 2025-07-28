@@ -1,6 +1,7 @@
 DEFAULT_CONFIG_FILE= "config/default.py"
 ADVANCED_CONFIG_FILE = "config/advanced_config.py"
 # MANDATORY_CONFIG_FILE = "config/mandatory_config.py"
+USERS_CONFIG_DIR = "users_configs"
 
 MANDATORY_CONFIG_KEYS = ["num_words", 
                          "word_size", 

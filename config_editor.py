@@ -1,9 +1,11 @@
 # config_editor.py
-from PySide6.QtWidgets import QWidget, QFormLayout, QLineEdit, QPushButton, QFileDialog, QVBoxLayout, QHBoxLayout, QMessageBox
+from PySide6.QtWidgets import QWidget, QFormLayout, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout, QMessageBox
 from PySide6.QtCore import Qt
 import ast
+import os
 from config_loader import _load_config_file
-from constants import DEFAULT_CONFIG_FILE, ADVANCED_CONFIG_FILE, MANDATORY_CONFIG_KEYS
+from constants import DEFAULT_CONFIG_FILE, ADVANCED_CONFIG_FILE, MANDATORY_CONFIG_KEYS, USERS_CONFIG_DIR
+from dialogs import SaveConfigDialog
 
 class ConfigEditor(QWidget):
     def __init__(self, personal_config_path=None, default_config_path=DEFAULT_CONFIG_FILE):
@@ -42,9 +44,12 @@ class ConfigEditor(QWidget):
         self.layout.addLayout(self.form)
 
         # Add Save and Clear buttons
+        button_style = "QPushButton { font-size: 14px; padding: 5px; }"
         self.button_layout = QHBoxLayout()
         self.save_button = QPushButton("💾 Save")
+        self.save_button.setStyleSheet(button_style)
         self.clear_button = QPushButton("🗑️ Clear")
+        self.clear_button.setStyleSheet(button_style)
         self.button_layout.addWidget(self.save_button)
         self.button_layout.addWidget(self.clear_button)
         self.layout.addLayout(self.button_layout)
@@ -84,23 +89,37 @@ class ConfigEditor(QWidget):
             if reply == QMessageBox.Cancel:
                 return
 
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Config File", self.personal_config_path, "Python Files (*.py)"
-        )
-        if not path:
-            return
+        dialog = SaveConfigDialog(self)
+        if dialog.exec():
+            config_name = dialog.get_config_name()
+            if not config_name:
+                QMessageBox.warning(self, "Invalid Name", "Configuration name cannot be empty.")
+                return
+            
+            path = os.path.join(USERS_CONFIG_DIR, f"{config_name}.py")
 
-        modified_config = {}
-        for key, value in current_config.items():
-            if key not in self.default_config or self.default_config[key] != value:
-                modified_config[key] = value
+            if os.path.exists(path):
+                reply = QMessageBox.question(
+                    self,
+                    "File Exists",
+                    f"A configuration named '{config_name}' already exists. Do you want to overwrite it?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+                if reply == QMessageBox.No:
+                    return
 
-        with open(path, "w") as f:
-            for k, v in modified_config.items():
-                f.write(f'{k} = {repr(v)}\n')
-        self.is_modified = False
-        self.update_save_button_state()
-        QMessageBox.information(self, "Save Complete", f"Configuration saved to {path}")
+            modified_config = {}
+            for key, value in current_config.items():
+                if key not in self.default_config or self.default_config[key] != value:
+                    modified_config[key] = value
+
+            with open(path, "w") as f:
+                for k, v in modified_config.items():
+                    f.write(f'{k} = {repr(v)}\n')
+            self.is_modified = False
+            self.update_save_button_state()
+            QMessageBox.information(self, "Save Complete", f"Configuration saved as {config_name}") 
 
     def clear_changes(self):
         for key, field in self.fields.items():

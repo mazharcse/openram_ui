@@ -2,12 +2,13 @@ import os
 import subprocess
 import glob
 import tempfile
-from PySide6.QtWidgets import QFileDialog, QMessageBox, QTextEdit, QInputDialog
+from PySide6.QtWidgets import QMessageBox, QTextEdit, QInputDialog
 from PySide6.QtCore import QCoreApplication
 from config_loader import _load_config_file
 from config_editor import ConfigEditor
 from advanced_config_editor import AdvancedConfigEditor
-from constants import MANDATORY_CONFIG_KEYS, ADVANCED_CONFIG_FILE, HOME_SCREEN_MESSAGE
+from constants import MANDATORY_CONFIG_KEYS, ADVANCED_CONFIG_FILE, HOME_SCREEN_MESSAGE, USERS_CONFIG_DIR
+from dialogs import LoadConfigDialog, SaveConfigDialog
 
 class Controller:
     def __init__(self, ui):
@@ -50,9 +51,13 @@ class Controller:
         return process, temp_script_path
 
     def load_config(self):
-        file_path, _ = QFileDialog.getOpenFileName(self.ui, "Load Config", "", "Python Files (*.py)")
-        if file_path:
-            self.config_path = file_path
+        dialog = LoadConfigDialog()
+        config_files = [f for f in os.listdir(USERS_CONFIG_DIR) if f.endswith(".py")]
+        dialog.list_widget.addItems([os.path.splitext(f)[0] for f in config_files])
+        
+        if dialog.exec():
+            selected_config = dialog.get_selected_config()
+            self.config_path = os.path.join(USERS_CONFIG_DIR, f"{selected_config}.py")
             if self.ui.editor:
                 self.ui.scroll_area.takeWidget()
                 self.ui.editor.deleteLater()
@@ -62,14 +67,7 @@ class Controller:
             self.ui.scroll_area.setWidget(self.ui.editor)
             
     def create_new_config(self):
-        # file_path, _ = QFileDialog.getOpenFileName(self.ui, "Load Config", "", "Python Files (*.py)")
-        # if file_path:
-        #     self.config_path = file_path
-        #     if self.ui.editor:
-        #         self.ui.scroll_area.takeWidget()
-        #         self.ui.editor.deleteLater()
-        #         self.ui.editor = None
-        self.ui.editor = ConfigEditor(None)  # Create a new empty config editor
+        self.ui.editor = ConfigEditor(None)
         self.ui.editor.setMinimumWidth(400)
         self.ui.scroll_area.setWidget(self.ui.editor)
 
@@ -92,13 +90,13 @@ class Controller:
             if reply == QMessageBox.Cancel:
                 return
 
-        path, _ = QFileDialog.getSaveFileName(
-            None, "Save Config File", "", "Python Files (*.py)"
-        )
-        if not path:
-            return
+        dialog = SaveConfigDialog()
+        if dialog.exec():
+            config_name = dialog.get_config_name()
+            if config_name:
+                path = os.path.join(USERS_CONFIG_DIR, f"{config_name}.py")
+                self.ui.editor.save_config(path)
 
-        self.ui.editor.save_config(path)
 
     def run_openram(self):
         if not self.config_path:
@@ -121,6 +119,7 @@ class Controller:
         self.ui.log_output.append("Running OpenRAM... please wait, this may take a while.")
         QCoreApplication.processEvents()
 
+        #todo run in thread
         sram_compiler_script = os.path.join(_load_config_file(ADVANCED_CONFIG_FILE).get("openram_path"), "sram_compiler.py")
         command_to_run = f"python {sram_compiler_script} {self.config_path}"
 

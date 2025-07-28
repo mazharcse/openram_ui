@@ -1,14 +1,9 @@
 import sys
-import os
-import subprocess
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QFileDialog, QPushButton, QWidget,
-    QVBoxLayout, QHBoxLayout, QTextEdit, QMessageBox, QScrollArea, QSplitter
+    QApplication, QMainWindow, QPushButton, QWidget,
+    QVBoxLayout, QHBoxLayout, QTextEdit, QScrollArea, QSplitter
 )
 from PySide6.QtCore import Qt
-from config_loader import load_config, _load_config_file
-from config_editor import ConfigEditor
-from constants import MANDATORY_CONFIG_KEYS, ADVANCED_CONFIG_FILE
 from controller import Controller
 
 class Ui_MainWindow(object):
@@ -26,12 +21,19 @@ class Ui_MainWindow(object):
         self.sidebar = QVBoxLayout()
         self.sidebar.setSpacing(10)
 
+        button_style = "QPushButton { font-size: 14px; padding: 5px; }"
         self.home_button = QPushButton("🏠 Home")
+        self.home_button.setStyleSheet(button_style)
         self.create_button = QPushButton("➕ Create Config")
+        self.create_button.setStyleSheet(button_style)
         self.load_button = QPushButton("📂 Load Config")
+        self.load_button.setStyleSheet(button_style)
         self.run_button = QPushButton("▶ Run OpenRAM")
+        self.run_button.setStyleSheet(button_style)
         self.view_button = QPushButton("🧿 View GDS")
+        self.view_button.setStyleSheet(button_style)
         self.advanced_settings_button = QPushButton("⚙️ Advanced Settings")
+        self.advanced_settings_button.setStyleSheet(button_style)
 
         self.sidebar.addWidget(self.home_button)
         self.sidebar.addWidget(self.create_button)
