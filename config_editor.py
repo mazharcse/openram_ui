@@ -42,27 +42,41 @@ class ConfigEditor(QWidget):
                 field.textChanged.connect(self.set_modified)
 
         self.layout.addLayout(self.form)
-
+       
         # Add Save and Clear buttons
         button_style = "QPushButton { font-size: 14px; padding: 5px; }"
         self.button_layout = QHBoxLayout()
-        self.save_button = QPushButton("💾 Save")
-        self.save_button.setStyleSheet(button_style)
+        if self.personal_config_path:
+            self.save_button = QPushButton("💾 Save")
+            self.save_button.setStyleSheet(button_style)
+        
+        self.save_as_button = QPushButton("💾 Save As...")    
+        self.save_as_button.setStyleSheet(button_style)
+            
         self.clear_button = QPushButton("🗑️ Clear")
         self.clear_button.setStyleSheet(button_style)
-        self.button_layout.addWidget(self.save_button)
+        if self.personal_config_path:
+            self.button_layout.addWidget(self.save_button)
+            self.save_button.clicked.connect(self._save_config_to_file, False) # todo add new method for save
+        
+        self.button_layout.addWidget(self.save_as_button)
+        # self.save_as_button.clicked.connect(self._save_config_to_file, True)
+        self.save_as_button.clicked.connect(lambda: self._save_config_to_file(True))
         self.button_layout.addWidget(self.clear_button)
         self.layout.addLayout(self.button_layout)
 
-        self.save_button.clicked.connect(self._save_config_to_file)
+        
         self.clear_button.clicked.connect(self.clear_changes)
 
     def set_modified(self):
         self.is_modified = True
         self.update_save_button_state()
+        
 
     def update_save_button_state(self):
-        self.save_button.setEnabled(self.is_modified)
+        if self.personal_config_path:
+            self.save_button.setEnabled(self.is_modified)
+        self.save_as_button.setEnabled(self.is_modified)           
 
     def get_config(self):
         config = {}
@@ -74,7 +88,7 @@ class ConfigEditor(QWidget):
                 config[key] = val
         return config
 
-    def _save_config_to_file(self):
+    def _save_config_to_file(self, update_personal_config=False):
         current_config = self.get_config()
         missing_fields = [field for field in MANDATORY_CONFIG_KEYS if not current_config.get(field)]
 
@@ -89,12 +103,22 @@ class ConfigEditor(QWidget):
             if reply == QMessageBox.Cancel:
                 return
 
-        dialog = SaveConfigDialog(self)
-        if dialog.exec():
-            config_name = dialog.get_config_name()
-            if not config_name:
-                QMessageBox.warning(self, "Invalid Name", "Configuration name cannot be empty.")
-                return
+        showSaveAsDialog = False
+
+        if self.personal_config_path:
+            if update_personal_config:
+                showSaveAsDialog = True  # Save and Save As            
+        else:
+            showSaveAsDialog = True  # No config path, show Save As dialog
+
+    
+        if showSaveAsDialog:
+            dialog = SaveConfigDialog(self)
+            if dialog.exec():
+                config_name = dialog.get_config_name()
+                if not config_name:
+                    QMessageBox.warning(self, "Invalid Name", "Configuration name cannot be empty.")
+                    return
             
             path = os.path.join(USERS_CONFIG_DIR, f"{config_name}.py")
 
@@ -107,19 +131,22 @@ class ConfigEditor(QWidget):
                     QMessageBox.No
                 )
                 if reply == QMessageBox.No:
-                    return
+                    return       
+        else:
+            config_name = os.path.splitext(os.path.basename(self.personal_config_path))[0]
+            path = self.personal_config_path
 
-            modified_config = {}
-            for key, value in current_config.items():
-                if key not in self.default_config or self.default_config[key] != value:
-                    modified_config[key] = value
+        modified_config = {}
+        for key, value in current_config.items():
+            if key not in self.default_config or self.default_config[key] != value:
+                modified_config[key] = value
 
-            with open(path, "w") as f:
-                for k, v in modified_config.items():
-                    f.write(f'{k} = {repr(v)}\n')
-            self.is_modified = False
-            self.update_save_button_state()
-            QMessageBox.information(self, "Save Complete", f"Configuration saved as {config_name}") 
+        with open(path, "w") as f:
+            for k, v in modified_config.items():
+                f.write(f'{k} = {repr(v)}\n')
+        self.is_modified = False
+        self.update_save_button_state()
+        QMessageBox.information(self, "Save Complete", f"Configuration saved as {config_name}") 
 
     def clear_changes(self):
         for key, field in self.fields.items():

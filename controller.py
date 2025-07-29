@@ -11,6 +11,9 @@ from advanced_config_editor import AdvancedConfigEditor
 from constants import MANDATORY_CONFIG_KEYS, ADVANCED_CONFIG_FILE, HOME_SCREEN_MESSAGE, USERS_CONFIG_DIR
 from dialogs import LoadConfigDialog, SaveConfigDialog
 
+from pathlib import Path
+import time
+
 class Controller:
     def __init__(self, ui):
         self.ui = ui
@@ -188,6 +191,113 @@ class Controller:
         self.ui.editor = AdvancedConfigEditor()
         self.ui.editor.setMinimumWidth(400)
         self.ui.scroll_area.setWidget(self.ui.editor)
+        
+        
+    def _get_file_properties_as_string(self, folder_path: str) -> str:
+        output = []
+        path = Path(folder_path)
+
+        if not path.exists() or not path.is_dir():
+            return f"Path '{folder_path}' does not exist or is not a directory."
+
+        for file in path.iterdir():
+            if file.is_file():
+                stats = file.stat()
+                file_info = (
+                    f"<br> Config: <b>{file.stem}, </b>"
+                    # f"  Size: {stats.st_size} bytes\n"
+                    f"  Last accessed: {time.ctime(stats.st_atime)}, "
+                    f"  Last modified: {time.ctime(stats.st_mtime)}"
+                    # f"  Metadata changed (ctime): {time.ctime(stats.st_ctime)}\n"
+                )
+                output.append(file_info)
+
+        return "\n".join(output) if output else "No files found in the directory."
+    
+    def _get_file_properties_as_table(self, folder_path: str) -> str:
+        output = []
+        path = Path(folder_path)
+
+        if not path.exists() or not path.is_dir():
+            return f"Path '{folder_path}' does not exist or is not a directory."
+
+        # Table header
+        header = f"{'Name':<30} {'Last Accessed':<25} {'Last Modified':<25}"
+        separator = "-" * len(header)
+        output.append(header)
+        output.append(separator)
+
+        for file in path.iterdir():
+            if file.is_file():
+                stats = file.stat()
+                name = file.stem
+                accessed = time.ctime(stats.st_atime)
+                modified = time.ctime(stats.st_mtime)
+                row = f"{name:<30} {accessed:<25} {modified:<25}"
+                output.append(row)
+
+        return "\n".join(output) if output else "No files found in the directory."
+    
+    def _get_file_properties_as_table(self, folder_path: str) -> str:
+        path = Path(folder_path)
+
+        if not path.exists() or not path.is_dir():
+            return f"<p>Path '{folder_path}' does not exist or is not a directory.</p>"
+
+        output = [
+            "<table border='1' cellpadding='5' cellspacing='0'>",
+            "<tr><th>Name</th><th>Last Accessed</th><th>Last Modified</th></tr>"
+        ]
+
+        for file in path.iterdir():
+            if file.is_file():
+                stats = file.stat()
+                name = file.stem
+                accessed = time.ctime(stats.st_atime)
+                modified = time.ctime(stats.st_mtime)
+                row = f"<tr><td>{name}</td><td>{accessed}</td><td>{modified}</td></tr>"
+                output.append(row)
+
+        output.append("</table>")
+        return "\n".join(output)
+    
+    
+    def _get_file_properties_as_table(self, folder_path: str) -> str:
+        path = Path(folder_path)
+
+        if not path.exists() or not path.is_dir():
+            return f"<p>Path '{folder_path}' does not exist or is not a directory.</p>"
+
+        # Gather all files with access time
+        files = []
+        for file in path.iterdir():
+            if file.is_file():
+                stats = file.stat()
+                files.append({
+                    "name": file.stem,
+                    "accessed": stats.st_atime,
+                    "modified": stats.st_mtime
+                })
+
+        # Sort by access time, descending, and take the last 3 accessed files
+        recent_files = sorted(files, key=lambda x: x["accessed"], reverse=True)[:3]
+
+        # Build HTML table
+        output = [
+            "<table border='1' cellpadding='5' cellspacing='0'>",
+            "<tr><th>Name</th><th>Last Accessed</th><th>Last Modified</th></tr>"
+        ]
+
+        for file in recent_files:
+            accessed = time.ctime(file["accessed"])
+            modified = time.ctime(file["modified"])
+            row = f"<tr><td>{file['name']}</td><td>{accessed}</td><td>{modified}</td></tr>"
+            output.append(row)
+
+        output.append("</table>")
+        return "\n".join(output)
+
+
 
     def show_home_screen(self):
         if self.ui.editor:
@@ -197,7 +307,9 @@ class Controller:
 
         home_text_edit = QTextEdit()
         home_text_edit.setReadOnly(True)
-        home_content = HOME_SCREEN_MESSAGE
+        # home_content = HOME_SCREEN_MESSAGE
+        # home_content = "<br><br><b>--- Recent Activity ---</b><br>" + self._get_file_properties_as_table(USERS_CONFIG_DIR)
+        home_content = "<br><b> Recent Activity </b><br>" +self._get_file_properties_as_table(USERS_CONFIG_DIR)
         
         advanced_config_content = ""
         try:
