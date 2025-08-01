@@ -1,8 +1,10 @@
 import os
+import shutil
 import subprocess
 import glob
 import tempfile
-from PySide6.QtWidgets import QMessageBox, QTextEdit, QInputDialog
+from PySide6.QtWidgets import QMessageBox, QTextEdit, QInputDialog, QFileDialog, QVBoxLayout, QLabel, QListWidget, \
+    QPushButton, QWidget, QHBoxLayout
 from PySide6.QtCore import QCoreApplication, QProcess
 
 from config_loader import _load_config_file
@@ -13,6 +15,7 @@ from dialogs import LoadConfigDialog, SaveConfigDialog
 
 from pathlib import Path
 import time
+
 
 class Controller:
     def __init__(self, ui):
@@ -43,7 +46,7 @@ class Controller:
                 f.write(f"source {setpaths_script}\n")
                 f.write(f"{command_to_run}\n")
                 temp_script_path = f.name
-            
+
             os.chmod(temp_script_path, 0o755)
             return temp_script_path
         except Exception as e:
@@ -54,7 +57,7 @@ class Controller:
         dialog = LoadConfigDialog()
         config_files = [f for f in os.listdir(USERS_CONFIG_DIR) if f.endswith(".py")]
         dialog.list_widget.addItems([os.path.splitext(f)[0] for f in config_files])
-        
+
         if dialog.exec():
             selected_config = dialog.get_selected_config()
             self.config_path = os.path.join(USERS_CONFIG_DIR, f"{selected_config}.py")
@@ -65,7 +68,7 @@ class Controller:
             self.ui.editor = ConfigEditor(self.config_path)
             self.ui.editor.setMinimumWidth(400)
             self.ui.scroll_area.setWidget(self.ui.editor)
-            
+
     def create_new_config(self):
         self.ui.editor = ConfigEditor(None)
         self.ui.editor.setMinimumWidth(400)
@@ -118,7 +121,8 @@ class Controller:
         self.ui.log_output.append("Running OpenRAM... please wait, this may take a while.")
         QCoreApplication.processEvents()
 
-        sram_compiler_script = os.path.join(_load_config_file(ADVANCED_CONFIG_FILE).get("openram_path"), "sram_compiler.py")
+        sram_compiler_script = os.path.join(_load_config_file(ADVANCED_CONFIG_FILE).get("openram_path"),
+                                            "sram_compiler.py")
         command_to_run = f"python3 -u {sram_compiler_script} {self.config_path}"
 
         self.temp_script_path = self._create_temp_script(command_to_run)
@@ -131,7 +135,7 @@ class Controller:
         self.process.setProcessChannelMode(QProcess.MergedChannels)
         self.process.readyReadStandardOutput.connect(self.on_output_ready)
         self.process.finished.connect(self.on_run_finished)
-        
+
         self.process.start("bash", [self.temp_script_path])
 
     def on_output_ready(self):
@@ -142,14 +146,14 @@ class Controller:
         self.ui.log_output.append(f"\nOpenRAM process finished.")
         self.ui.log_output.append(f"Exit Code: {exitCode}")
         self.ui.log_output.append(f"Exit Status: {'Normal' if exitStatus == QProcess.NormalExit else 'Crash'}")
-        
+
         self.ui.run_button.setEnabled(True)
         self.ui.run_button.setText("Run OpenRAM")
 
         if self.temp_script_path and os.path.exists(self.temp_script_path):
             os.unlink(self.temp_script_path)
             self.temp_script_path = None
-        
+
         self.process = None
 
     def view_gds(self):
@@ -170,7 +174,8 @@ class Controller:
             gds_file = gds_files[0]
         else:
             file_names = [os.path.basename(f) for f in gds_files]
-            file_name, ok = QInputDialog.getItem(self.ui, "Select GDS File", "Multiple GDS files found...", file_names, 0, False)
+            file_name, ok = QInputDialog.getItem(self.ui, "Select GDS File", "Multiple GDS files found...",
+                                                 file_names, 0, False)
             if ok and file_name:
                 gds_file = os.path.join(output_path, file_name)
 
@@ -182,6 +187,77 @@ class Controller:
                 # The temporary script will not be deleted by this process, which is acceptable.
                 QProcess.startDetached("bash", [temp_script_path])
 
+    def view_output(self):
+        if not self.config_path:
+            QMessageBox.warning(self.ui, "Warning", "Please load a config file first.")
+            return
+
+        config = _load_config_file(self.config_path)
+        output_path = config.get(OUTPUT_PATH, ".")
+        config_name = os.path.splitext(os.path.basename(self.config_path))[0]
+
+        output_widget = QWidget()
+        layout = QVBoxLayout(output_widget)
+
+        config_label = QLabel(f"Config: {config_name}")
+        layout.addWidget(config_label)
+
+        file_list_label = QLabel("Output Files:")
+        layout.addWidget(file_list_label)
+
+        file_list = QListWidget()
+        try:
+            files = sorted(os.listdir(output_path))
+            file_list.addItems(files)
+        except FileNotFoundError:
+            file_list.addItem("Output directory not found.")
+        layout.addWidget(file_list)
+
+        button_layout = QHBoxLayout()
+        download_button = QPushButton("Download Output Folder")
+        download_button.clicked.connect(lambda: self.download_output_folder(output_path))
+        button_layout.addWidget(download_button)
+
+        view_gds_button = QPushButton("View GDS")
+        view_gds_button.clicked.connect(self.view_gds)
+        button_layout.addWidget(view_gds_button)
+        
+        layout.addLayout(button_layout)
+
+        if self.ui.editor:
+            self.ui.scroll_area.takeWidget()
+            self.ui.editor.deleteLater()
+            self.ui.editor = None
+
+        self.ui.scroll_area.setWidget(output_widget)
+
+    def download_output_folder(self, output_path):
+        suggested_name = os.path.basename(output_path)
+        home_dir = str(Path.home())
+        initial_path = os.path.join(home_dir, suggested_name)
+
+        destination, _ = QFileDialog.getSaveFileName(self.ui, "Save Output Folder As", initial_path)
+
+        if destination:
+            if os.path.exists(destination):
+                reply = QMessageBox.question(self.ui, "Destination Exists",
+                                               f"The destination '{destination}' already exists. Do you want to overwrite it?",
+                                               QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                if reply == QMessageBox.Yes:
+                    try:
+                        shutil.rmtree(destination)
+                    except Exception as e:
+                        QMessageBox.critical(self.ui, "Error", f"Failed to remove existing folder: {e}")
+                        return
+                else:
+                    return  # User chose not to overwrite
+
+            try:
+                shutil.copytree(output_path, destination)
+                QMessageBox.information(self.ui, "Success", f"Output folder downloaded successfully to {destination}")
+            except Exception as e:
+                QMessageBox.critical(self.ui, "Error", f"Failed to download folder: {e}")
+
     def show_advanced_settings(self):
         if self.ui.editor:
             self.ui.scroll_area.takeWidget()
@@ -191,8 +267,7 @@ class Controller:
         self.ui.editor = AdvancedConfigEditor()
         self.ui.editor.setMinimumWidth(400)
         self.ui.scroll_area.setWidget(self.ui.editor)
-        
-        
+
     def _get_file_properties_as_string(self, folder_path: str) -> str:
         output = []
         path = Path(folder_path)
@@ -213,7 +288,7 @@ class Controller:
                 output.append(file_info)
 
         return "\n".join(output) if output else "No files found in the directory."
-    
+
     def _get_file_properties_as_table(self, folder_path: str) -> str:
         output = []
         path = Path(folder_path)
@@ -237,7 +312,7 @@ class Controller:
                 output.append(row)
 
         return "\n".join(output) if output else "No files found in the directory."
-    
+
     def _get_file_properties_as_table(self, folder_path: str) -> str:
         path = Path(folder_path)
 
@@ -260,8 +335,7 @@ class Controller:
 
         output.append("</table>")
         return "\n".join(output)
-    
-    
+
     def _get_file_properties_as_table(self, folder_path: str) -> str:
         path = Path(folder_path)
 
@@ -297,8 +371,6 @@ class Controller:
         output.append("</table>")
         return "\n".join(output)
 
-
-
     def show_home_screen(self):
         if self.ui.editor:
             self.ui.scroll_area.takeWidget()
@@ -309,8 +381,8 @@ class Controller:
         home_text_edit.setReadOnly(True)
         # home_content = HOME_SCREEN_MESSAGE
         # home_content = "<br><br><b>--- Recent Activity ---</b><br>" + self._get_file_properties_as_table(USERS_CONFIG_DIR)
-        home_content = "<br><b> Recent Activity </b><br>" +self._get_file_properties_as_table(USERS_CONFIG_DIR)
-        
+        home_content = "<br><b> Recent Activity </b><br>" + self._get_file_properties_as_table(USERS_CONFIG_DIR)
+
         advanced_config_content = ""
         try:
             advanced_config = _load_config_file(ADVANCED_CONFIG_FILE)

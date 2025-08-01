@@ -30,7 +30,7 @@ class Ui_MainWindow(object):
         self.load_button.setStyleSheet(button_style)
         self.run_button = QPushButton("▶ Run OpenRAM")
         self.run_button.setStyleSheet(button_style)
-        self.view_button = QPushButton("🧿 View GDS")
+        self.view_button = QPushButton("📄 View Output")
         self.view_button.setStyleSheet(button_style)
         self.advanced_settings_button = QPushButton("⚙️ Advanced Settings")
         self.advanced_settings_button.setStyleSheet(button_style)
@@ -89,7 +89,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.create_button.clicked.connect(self.controller.create_new_config)
         self.load_button.clicked.connect(self.controller.load_config)
         self.run_button.clicked.connect(self.controller.run_openram)
-        self.view_button.clicked.connect(self.controller.view_gds)
+        self.view_button.clicked.connect(self.controller.view_output)
         self.advanced_settings_button.clicked.connect(self.controller.show_advanced_settings)
 
         self.controller.show_home_screen() # Show home screen on startup
