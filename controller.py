@@ -8,7 +8,7 @@ from PySide6.QtCore import QCoreApplication, QProcess
 from config_loader import _load_config_file
 from config_editor import ConfigEditor
 from advanced_config_editor import AdvancedConfigEditor
-from constants import MANDATORY_CONFIG_KEYS, ADVANCED_CONFIG_FILE, HOME_SCREEN_MESSAGE, USERS_CONFIG_DIR
+from constants import MANDATORY_CONFIG_KEYS, ADVANCED_CONFIG_FILE, HOME_SCREEN_MESSAGE, USERS_CONFIG_DIR, OUTPUT_PATH
 from dialogs import LoadConfigDialog, SaveConfigDialog
 
 from pathlib import Path
@@ -158,7 +158,7 @@ class Controller:
             return
 
         config = _load_config_file(self.config_path)
-        output_path = config.get("output_path", ".")
+        output_path = config.get(OUTPUT_PATH, ".")
         gds_files = glob.glob(os.path.join(output_path, "*.gds"))
 
         if not gds_files:

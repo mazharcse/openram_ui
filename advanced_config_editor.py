@@ -1,9 +1,12 @@
 # advanced_config_editor.py
-from PySide6.QtWidgets import QWidget, QFormLayout, QLineEdit, QPushButton, QVBoxLayout, QFileDialog, QHBoxLayout, QMessageBox
-from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QWidget, QFormLayout, QLineEdit, QPushButton, QVBoxLayout, QFileDialog, QHBoxLayout, QMessageBox, QComboBox
+from PySide6.QtCore import Qt, QDir
 import ast
+import os
 from config_loader import _load_config_file
-from constants import ADVANCED_CONFIG_FILE
+from constants import ADVANCED_CONFIG_FILE, TECHNOLOGY_PATH, OPENRAM_PATH
+import shutil
+
 
 class AdvancedConfigEditor(QWidget):
     def __init__(self, config_path=ADVANCED_CONFIG_FILE):
@@ -24,7 +27,7 @@ class AdvancedConfigEditor(QWidget):
 
         # Generate editable fields
         for key, value in self.config_dict.items():
-            if key == "openram_path":
+            if key == OPENRAM_PATH:
                 path_layout = QHBoxLayout()
                 field = QLineEdit(str(value))
                 browse_button = QPushButton("Browse")
@@ -33,6 +36,34 @@ class AdvancedConfigEditor(QWidget):
                 path_layout.addWidget(browse_button)
                 self.fields[key] = field
                 self.form.addRow(key, path_layout)
+            elif key == "tech_name":
+                tech_layout = QHBoxLayout()
+                combo = QComboBox()
+
+                # Construct technology folder path
+                tech_base_path = os.path.join(self.config_dict.get(OPENRAM_PATH, ""), TECHNOLOGY_PATH)
+
+                try:
+                    tech_folders = [
+                        name for name in os.listdir(tech_base_path)
+                        if os.path.isdir(os.path.join(tech_base_path, name))
+                    ]
+                    combo.addItems(tech_folders)
+                except Exception as e:
+                    combo.addItem("Error loading tech folders")
+
+                # Set current value if it matches one of the folders
+                if str(value) in tech_folders:
+                    combo.setCurrentText(str(value))
+
+                upload_button = QPushButton("Upload Technology")
+                upload_button.clicked.connect(lambda: self.upload_pdk_folder(combo, tech_base_path))
+
+                tech_layout.addWidget(combo)
+                tech_layout.addWidget(upload_button)
+                self.fields[key] = combo
+                self.form.addRow(key, tech_layout)
+
             else:
                 field = QLineEdit(str(value))
                 self.fields[key] = field
@@ -93,3 +124,43 @@ class AdvancedConfigEditor(QWidget):
         if directory:
             field_widget.setText(directory)
             self.set_modified()
+            
+    
+    def upload_pdk_folder(self, combo: QComboBox, tech_base_path: str):
+        folder_path = QFileDialog.getExistingDirectory(
+            self,
+            "Select Folder to Upload",
+            QDir.homePath()
+        )
+
+        if not folder_path:
+            return  # User cancelled
+
+        folder_name = os.path.basename(folder_path)
+        os.makedirs(tech_base_path, exist_ok=True)
+        target_path = os.path.join(tech_base_path, folder_name)
+
+        # Auto-rename if folder exists
+        if os.path.exists(target_path):
+            base, i = target_path, 1
+            while os.path.exists(f"{base}_{i}"):
+                i += 1
+            target_path = f"{base}_{i}"
+            folder_name = os.path.basename(target_path)
+
+        try:
+            shutil.copytree(folder_path, target_path)
+            QMessageBox.information(self, "Success", f"Folder uploaded to:\n{target_path}")
+
+            # Refresh the combo box
+            combo.clear()
+            tech_folders = [
+                name for name in os.listdir(tech_base_path)
+                if os.path.isdir(os.path.join(tech_base_path, name))
+            ]
+            combo.addItems(tech_folders)
+            combo.setCurrentText(folder_name)  # Select the newly uploaded folder
+            self.set_modified()  # If you track unsaved changes
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to upload folder:\n{e}")
