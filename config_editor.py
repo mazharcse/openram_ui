@@ -1,11 +1,14 @@
 # config_editor.py
-from PySide6.QtWidgets import QWidget, QFormLayout, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout, QMessageBox
+from PySide6.QtWidgets import QWidget, QFormLayout, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout, QMessageBox, QLabel
 from PySide6.QtCore import Qt
 import ast
 import os
 from config_loader import _load_config_file
 from constants import DEFAULT_CONFIG_FILE, ADVANCED_CONFIG_FILE, MANDATORY_CONFIG_KEYS, USERS_CONFIG_DIR
 from dialogs import SaveConfigDialog
+from pathlib import Path
+
+
 
 class ConfigEditor(QWidget):
     def __init__(self, personal_config_path=None, default_config_path=DEFAULT_CONFIG_FILE):
@@ -24,8 +27,11 @@ class ConfigEditor(QWidget):
         self.layout = QVBoxLayout()
         self.form = QFormLayout()
         self.setLayout(self.layout)
+                
 
         if self.personal_config_path:
+            config_label = QLabel(f"Current Config:   <b>{Path(self.personal_config_path).stem}</b>")
+            self.layout.addWidget(config_label)
             # Display personal config fields first
             for key, value in self.personal_config.items():
                 field = QLineEdit(str(value))

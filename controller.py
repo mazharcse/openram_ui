@@ -199,7 +199,7 @@ class Controller:
         output_widget = QWidget()
         layout = QVBoxLayout(output_widget)
 
-        config_label = QLabel(f"Config: {config_name}")
+        config_label = QLabel(f"Current Config:   <b>{config_name}</b>")
         layout.addWidget(config_label)
 
         file_list_label = QLabel("Output Files:")
