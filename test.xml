@@ -1,0 +1,38 @@
+<mxfile host="app.diagrams.net" modified="2023-10-04T12:00:00" agent="Mozilla/5.0" version="21.7.3" type="device">
+  <diagram name="Page-1" id="U6f9c9d1a0a1e4e4e">
+    <mxGraphModel dx="1200" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="+---------------------------------------------+" style="shape=rectangle;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="100" width="600" height="400" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="| Sidebar (left) | Main Panel (right) |" style="shape=rectangle;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="120" width="600" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="|-------------------|-------------------------|" style="shape=rectangle;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="140" width="600" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="| [📂 Load Config] | ConfigEditor form here |" style="shape=rectangle;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="160" width="600" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="| [💾 Save Config] | |" style="shape=rectangle;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="180" width="600" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="7" value="| [▶ Run OpenRAM] | |" style="shape=rectangle;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="200" width="600" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="| [🔍 View GDS] | |" style="shape=rectangle;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="220" width="600" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="9" value="| | [Live Logs Below] |" style="shape=rectangle;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="240" width="600" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="10" value="+---------------------------------------------+" style="shape=rectangle;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="260" width="600" height="20" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
+

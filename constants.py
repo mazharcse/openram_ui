@@ -1,6 +1,7 @@
 DEFAULT_CONFIG_FILE= "config/default.py"
 ADVANCED_CONFIG_FILE = "config/advanced_config.py"
 # MANDATORY_CONFIG_FILE = "config/mandatory_config.py"
+TECHNOLOGY_FILE = "technology.txt"
 USERS_CONFIG_DIR = "users_configs"
 
 HOME_SCREEN_FILE = "home_screen.csv"
