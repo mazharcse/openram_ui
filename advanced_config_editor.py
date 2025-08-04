@@ -7,6 +7,7 @@ import os
 from config_loader import _load_config_file
 from constants import ADVANCED_CONFIG_FILE, TECHNOLOGY_PATH, OPENRAM_PATH, TECHNOLOGY_FILE
 import shutil
+import subprocess
 
 
 class AdvancedConfigEditor(QWidget):
@@ -38,6 +39,7 @@ class AdvancedConfigEditor(QWidget):
                 self.fields[key] = field
                 self.form.addRow(key, path_layout)
                 field.textChanged.connect(self.set_modified)
+                field.textChanged.connect(self.refresh_tech_list)
             elif key == "tech_name":
                 tech_layout = QVBoxLayout()
                 list_widget = QListWidget()
@@ -72,14 +74,36 @@ class AdvancedConfigEditor(QWidget):
         self.save_button.clicked.connect(self._save_config)
         self.clear_button.clicked.connect(self.clear_changes)
 
-    def populate_tech_list(self, list_widget):
+    def populate_tech_list(self, list_widget: QListWidget):
         list_widget.clear()
-        try:
-            with open(TECHNOLOGY_FILE, "r") as f:
-                techs = [line.strip() for line in f if line.strip()]
-                list_widget.addItems(techs)
-        except FileNotFoundError:
-            QMessageBox.warning(self, "Warning", "technology file not found. Please create it.")
+        
+        openram_path_field = self.fields.get(OPENRAM_PATH)
+        openram_path = openram_path_field.text() if openram_path_field else ""
+        is_remote = '@' in openram_path and ':' in openram_path
+
+        techs = []
+        if is_remote:
+            try:
+                user_host, remote_openram_path = openram_path.split(':', 1)
+                remote_tech_file = os.path.join(remote_openram_path, os.path.basename(TECHNOLOGY_FILE))
+                
+                cat_command = f"ssh -o BatchMode=yes {user_host} 'cat {remote_tech_file}'"
+                result = subprocess.run(cat_command, shell=True, capture_output=True, text=True, check=True)
+                techs = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
+            except subprocess.CalledProcessError as e:
+                QMessageBox.warning(self, "Warning", f"Could not read remote technology file. It may not exist yet.\nError: {e.stderr}")
+            except Exception as e:
+                QMessageBox.warning(self, "Warning", f"An error occurred while fetching remote technologies: {e}")
+        else:
+            try:
+                with open(TECHNOLOGY_FILE, "r") as f:
+                    techs = [line.strip() for line in f if line.strip()]
+            except FileNotFoundError:
+                # This is not an error, the file might not be created yet.
+                pass
+        
+        if techs:
+            list_widget.addItems(techs)
 
     def set_modified(self):
         self.is_modified = True
@@ -129,6 +153,11 @@ class AdvancedConfigEditor(QWidget):
         self.is_modified = False
         self.update_save_button_state()
 
+    def refresh_tech_list(self):
+        tech_list_widget = self.fields.get("tech_name")
+        if isinstance(tech_list_widget, QListWidget):
+            self.populate_tech_list(tech_list_widget)
+
     def browse_openram_path(self, field_widget):
         directory = QFileDialog.getExistingDirectory(self, "Select OpenRAM Directory")
         if directory:
@@ -148,45 +177,101 @@ class AdvancedConfigEditor(QWidget):
         folder_name = os.path.basename(folder_path)
         
         openram_path_field = self.fields.get(OPENRAM_PATH)
-        if not openram_path_field or not openram_path_field.text() or not os.path.isdir(openram_path_field.text()):
-            QMessageBox.critical(self, "Error", "OpenRAM path is not set or invalid.")
+        if not openram_path_field or not openram_path_field.text():
+            QMessageBox.critical(self, "Error", "OpenRAM path is not set.")
             return
         
-        tech_base_path = os.path.join(openram_path_field.text(), TECHNOLOGY_PATH)
-        os.makedirs(tech_base_path, exist_ok=True)
-        target_path = os.path.join(tech_base_path, folder_name)
+        openram_path = openram_path_field.text()
+        is_remote = '@' in openram_path and ':' in openram_path
 
-        if os.path.exists(target_path):
-            reply = QMessageBox.question(self, "Folder Exists", 
-                                           f"The technology '{folder_name}' already exists. Overwrite?",
-                                           QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if reply == QMessageBox.No:
-                return
+        if is_remote:
             try:
-                shutil.rmtree(target_path)
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to remove existing folder: {e}")
+                user_host, remote_openram_path = openram_path.split(':', 1)
+            except ValueError:
+                QMessageBox.critical(self, "Error", "Invalid remote path format. Use user@host:/path/to/openram")
                 return
 
-        try:
-            shutil.copytree(folder_path, target_path)
+            remote_tech_base_path = os.path.join(remote_openram_path, TECHNOLOGY_PATH)
+            remote_target_path = os.path.join(remote_tech_base_path, folder_name)
             
-            with open(TECHNOLOGY_FILE, "a+") as f:
-                f.seek(0)
-                techs = [line.strip() for line in f]
-                if folder_name not in techs:
-                    f.write(f"\n{folder_name}")
+            # 1. Use SSH to check if the folder exists and ask to overwrite
+            check_exists_command = f"ssh -o BatchMode=yes {user_host} '[ -d {remote_target_path} ]'"
+            try:
+                result = subprocess.run(check_exists_command, shell=True, capture_output=True)
+                if result.returncode == 0: # Directory exists
+                    reply = QMessageBox.question(self, "Folder Exists", 
+                                                   f"The remote technology '{folder_name}' already exists. Overwrite?",
+                                                   QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                    if reply == QMessageBox.No:
+                        return
+                    # If yes, remove the remote directory first
+                    rm_command = f"ssh -o BatchMode=yes {user_host} 'rm -rf {remote_target_path}'"
+                    subprocess.run(rm_command, shell=True, check=True, capture_output=True)
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed during remote check/remove: {e}")
+                return
 
-            QMessageBox.information(self, "Success", f"Folder uploaded to:\n{target_path}")
+            # 2. Use SCP to upload the folder
+            try:
+                QMessageBox.information(self, "Uploading", f"Uploading folder to {user_host}:{remote_target_path}")
+                scp_command = ["scp", "-o", "BatchMode=yes", "-r", folder_path, f"{user_host}:{remote_target_path}"]
+                subprocess.run(scp_command, check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e:
+                QMessageBox.critical(self, "Error", f"Failed to upload folder via scp:\n{e.stderr}")
+                return
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"An unexpected error occurred during upload:\n{e}")
+                return
 
+            # 3. Use SSH to update the remote technology.txt
+            try:
+                remote_tech_file = os.path.join(remote_openram_path, os.path.basename(TECHNOLOGY_FILE))
+                # This command safely checks if the line exists before appending
+                append_command = f"""ssh -o BatchMode=yes {user_host} "grep -qxF '{folder_name}' {remote_tech_file} || echo '{folder_name}' >> {remote_tech_file}" """
+                subprocess.run(append_command, shell=True, check=True, capture_output=True)
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to update remote technology.txt: {e}")
+                return
+
+            QMessageBox.information(self, "Success", f"Folder uploaded to:\n{user_host}:{remote_target_path}")
+            # Refresh the list, which will now fetch from the remote.
             self.populate_tech_list(list_widget)
-            for i in range(list_widget.count()):
-                item = list_widget.item(i)
-                if item.text() == folder_name:
-                    item.setSelected(True)
-                    list_widget.scrollToItem(item)
-                    break
-            # self.set_modified()
+            self.set_modified()
 
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to upload folder:\n{e}")
+        else: # Local upload logic
+            if not os.path.isdir(openram_path):
+                QMessageBox.critical(self, "Error", "Local OpenRAM path is not a valid directory.")
+                return
+
+            tech_base_path = os.path.join(openram_path, TECHNOLOGY_PATH)
+            os.makedirs(tech_base_path, exist_ok=True)
+            target_path = os.path.join(tech_base_path, folder_name)
+
+            if os.path.exists(target_path):
+                reply = QMessageBox.question(self, "Folder Exists", 
+                                               f"The technology '{folder_name}' already exists. Overwrite?",
+                                               QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                if reply == QMessageBox.No:
+                    return
+                try:
+                    shutil.rmtree(target_path)
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Failed to remove existing folder: {e}")
+                    return
+
+            try:
+                shutil.copytree(folder_path, target_path)
+                
+                with open(TECHNOLOGY_FILE, "a+") as f:
+                    f.seek(0)
+                    techs = [line.strip() for line in f]
+                    if folder_name not in techs:
+                        f.write(f"\n{folder_name}")
+
+                QMessageBox.information(self, "Success", f"Folder uploaded to:\n{target_path}")
+
+                self.populate_tech_list(list_widget)
+                self.set_modified()
+
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to upload folder:\n{e}")

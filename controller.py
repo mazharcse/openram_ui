@@ -100,6 +100,21 @@ class Controller:
                 path = os.path.join(USERS_CONFIG_DIR, f"{config_name}.py")
                 self.ui.editor.save_config(path)
 
+    def _create_remote_temp_script(self, scp_command, ssh_command):
+        """Creates a temporary shell script to run a remote command."""
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.sh', encoding='utf-8') as f:
+                f.write("#!/bin/bash\n")
+                f.write("set -e\n")  # Exit on error
+                f.write(f"{scp_command}\n")
+                f.write(f"{ssh_command}\n")
+                temp_script_path = f.name
+            os.chmod(temp_script_path, 0o755)
+            return temp_script_path
+        except Exception as e:
+            QMessageBox.critical(self.ui, "Error", f"Failed to create temporary script for remote execution: {e}")
+            return None
+
     def run_openram(self):
         if self.process and self.process.state() != QProcess.NotRunning:
             QMessageBox.warning(self.ui, "Warning", "An OpenRAM process is already running.")
@@ -121,22 +136,66 @@ class Controller:
         self.ui.log_output.append("Running OpenRAM... please wait, this may take a while.")
         QCoreApplication.processEvents()
 
-        sram_compiler_script = os.path.join(_load_config_file(ADVANCED_CONFIG_FILE).get("openram_path"),
-                                            "sram_compiler.py")
-        command_to_run = f"python3 -u {sram_compiler_script} {self.config_path}"
+        advanced_config = _load_config_file(ADVANCED_CONFIG_FILE)
+        openram_path = advanced_config.get("openram_path", "")
 
-        self.temp_script_path = self._create_temp_script(command_to_run)
-        if not self.temp_script_path:
-            self.ui.run_button.setEnabled(True)
-            self.ui.run_button.setText("Run OpenRAM")
-            return
+        is_remote = '@' in openram_path and ':' in openram_path
 
-        self.process = QProcess()
-        self.process.setProcessChannelMode(QProcess.MergedChannels)
-        self.process.readyReadStandardOutput.connect(self.on_output_ready)
-        self.process.finished.connect(self.on_run_finished)
+        if is_remote:
+            self.ui.log_output.append("Remote OpenRAM path detected.")
+            self.ui.log_output.append("NOTE: Viewing outputs directly from the UI is not supported for remote runs.")
+            try:
+                user_host, remote_path = openram_path.split(':', 1)
+                user, host = user_host.split('@', 1)
+            except ValueError:
+                QMessageBox.critical(self.ui, "Error", "Invalid remote path format. Use user@host:/path/to/openram")
+                self.ui.run_button.setEnabled(True)
+                self.ui.run_button.setText("Run OpenRAM")
+                return
 
-        self.process.start("bash", [self.temp_script_path])
+            remote_temp_config_name = os.path.basename(self.config_path)
+            remote_temp_config_path = f"/tmp/{remote_temp_config_name}"
+            sram_compiler_script = os.path.join(remote_path, "sram_compiler.py")
+
+            remote_command = f"""
+                cd {remote_path} && \
+                source openram_env/bin/activate && \
+                source miniconda/bin/activate && \
+                source setpaths.sh && \
+                python3 -u {sram_compiler_script} {remote_temp_config_path} && \
+                rm {remote_temp_config_path}
+            """
+            
+            scp_command = f"scp -o BatchMode=yes {self.config_path} {user}@{host}:{remote_temp_config_path}"
+            ssh_command = f"ssh -o BatchMode=yes {user}@{host} '{remote_command}'"
+
+            self.temp_script_path = self._create_remote_temp_script(scp_command, ssh_command)
+            if not self.temp_script_path:
+                self.ui.run_button.setEnabled(True)
+                self.ui.run_button.setText("Run OpenRAM")
+                return
+
+            self.process = QProcess()
+            self.process.setProcessChannelMode(QProcess.MergedChannels)
+            self.process.readyReadStandardOutput.connect(self.on_output_ready)
+            self.process.finished.connect(self.on_run_finished)
+            self.process.start("bash", [self.temp_script_path])
+
+        else:  # Local execution
+            sram_compiler_script = os.path.join(openram_path, "sram_compiler.py")
+            command_to_run = f"python3 -u {sram_compiler_script} {self.config_path}"
+
+            self.temp_script_path = self._create_temp_script(command_to_run)
+            if not self.temp_script_path:
+                self.ui.run_button.setEnabled(True)
+                self.ui.run_button.setText("Run OpenRAM")
+                return
+
+            self.process = QProcess()
+            self.process.setProcessChannelMode(QProcess.MergedChannels)
+            self.process.readyReadStandardOutput.connect(self.on_output_ready)
+            self.process.finished.connect(self.on_run_finished)
+            self.process.start("bash", [self.temp_script_path])
 
     def on_output_ready(self):
         output = self.process.readAllStandardOutput().data().decode(errors='replace')
@@ -162,30 +221,91 @@ class Controller:
             return
 
         config = _load_config_file(self.config_path)
-        output_path = config.get(OUTPUT_PATH, ".")
-        gds_files = glob.glob(os.path.join(output_path, "*.gds"))
+        output_path_from_config = config.get(OUTPUT_PATH, ".")
 
-        if not gds_files:
-            QMessageBox.warning(self.ui, "Warning", f"No GDS file found in {output_path}")
-            return
+        advanced_config = _load_config_file(ADVANCED_CONFIG_FILE)
+        openram_path = advanced_config.get("openram_path", "")
+        is_remote = '@' in openram_path and ':' in openram_path
 
-        gds_file = None
-        if len(gds_files) == 1:
-            gds_file = gds_files[0]
-        else:
-            file_names = [os.path.basename(f) for f in gds_files]
-            file_name, ok = QInputDialog.getItem(self.ui, "Select GDS File", "Multiple GDS files found...",
-                                                 file_names, 0, False)
-            if ok and file_name:
-                gds_file = os.path.join(output_path, file_name)
+        if is_remote:
+            self.ui.log_output.append("Remote OpenRAM path detected for viewing GDS.")
+            self.ui.log_output.append("NOTE: This requires a working X11 forward connection for your SSH session.")
+            try:
+                user_host, remote_openram_path = openram_path.split(':', 1)
+                user, host = user_host.split('@', 1)
+            except ValueError:
+                QMessageBox.critical(self.ui, "Error", "Invalid remote path format. Use user@host:/path/to/openram")
+                return
 
-        if gds_file:
-            command = f"klayout {gds_file}"
-            temp_script_path = self._create_temp_script(command)
-            if temp_script_path:
-                # Use startDetached for a "fire-and-forget" GUI application like klayout.
-                # The temporary script will not be deleted by this process, which is acceptable.
-                QProcess.startDetached("bash", [temp_script_path])
+            remote_output_path = os.path.join(remote_openram_path, output_path_from_config)
+            
+            list_gds_command = f"ssh -o BatchMode=yes {user}@{host} 'ls -1 {remote_output_path}/*.gds 2>/dev/null'"
+
+            try:
+                result = subprocess.run(list_gds_command, shell=True, capture_output=True, text=True, timeout=15)
+                if result.returncode != 0:
+                    raise subprocess.CalledProcessError(result.returncode, result.args, output=result.stdout, stderr=result.stderr)
+                
+                gds_files_full_paths = result.stdout.strip().split('\n')
+                gds_files_full_paths = [f for f in gds_files_full_paths if f]
+            except Exception as e:
+                error_msg = f"Could not list remote GDS files.\nCommand: {list_gds_command}\nError: {e}"
+                if hasattr(e, 'stderr'):
+                    error_msg += f"\nStderr: {e.stderr}"
+                QMessageBox.warning(self.ui, "Warning", error_msg)
+                return
+
+            if not gds_files_full_paths:
+                QMessageBox.warning(self.ui, "Warning", f"No GDS file found in remote directory: {remote_output_path}")
+                return
+
+            remote_gds_file_path = None
+            if len(gds_files_full_paths) == 1:
+                remote_gds_file_path = gds_files_full_paths[0]
+            else:
+                file_names = [os.path.basename(f) for f in gds_files_full_paths]
+                file_name, ok = QInputDialog.getItem(self.ui, "Select Remote GDS File", "Multiple GDS files found...", file_names, 0, False)
+                if ok and file_name:
+                    remote_gds_file_path = next((path for path in gds_files_full_paths if os.path.basename(path) == file_name), None)
+
+            if remote_gds_file_path:
+                remote_klayout_command = f"""
+                    cd {remote_openram_path} && \
+                    source openram_env/bin/activate && \
+                    source miniconda/bin/activate && \
+                    source setpaths.sh && \
+                    klayout {remote_gds_file_path}
+                """
+                
+                success = QProcess.startDetached("ssh", ["-o", "BatchMode=yes", "-X", f"{user}@{host}", remote_klayout_command])
+
+                if not success:
+                    QMessageBox.critical(self.ui, "Error", "Failed to start the remote klayout process via SSH.")
+                else:
+                    self.ui.log_output.append(f"Attempting to launch klayout on {host} for {os.path.basename(remote_gds_file_path)}...")
+
+        else:  # Local execution
+            gds_files = glob.glob(os.path.join(output_path_from_config, "*.gds"))
+
+            if not gds_files:
+                QMessageBox.warning(self.ui, "Warning", f"No GDS file found in {output_path_from_config}")
+                return
+
+            gds_file = None
+            if len(gds_files) == 1:
+                gds_file = gds_files[0]
+            else:
+                file_names = [os.path.basename(f) for f in gds_files]
+                file_name, ok = QInputDialog.getItem(self.ui, "Select GDS File", "Multiple GDS files found...",
+                                                     file_names, 0, False)
+                if ok and file_name:
+                    gds_file = os.path.join(output_path_from_config, file_name)
+
+            if gds_file:
+                command = f"klayout {gds_file}"
+                temp_script_path = self._create_temp_script(command)
+                if temp_script_path:
+                    QProcess.startDetached("bash", [temp_script_path])
 
     def view_output(self):
         if not self.config_path:
@@ -193,7 +313,7 @@ class Controller:
             return
 
         config = _load_config_file(self.config_path)
-        output_path = config.get(OUTPUT_PATH, ".")
+        output_path_from_config = config.get(OUTPUT_PATH, ".")
         config_name = os.path.splitext(os.path.basename(self.config_path))[0]
 
         output_widget = QWidget()
@@ -206,16 +326,51 @@ class Controller:
         layout.addWidget(file_list_label)
 
         file_list = QListWidget()
-        try:
-            files = sorted(os.listdir(output_path))
-            file_list.addItems(files)
-        except FileNotFoundError:
-            file_list.addItem("Output directory not found.")
         layout.addWidget(file_list)
+
+        advanced_config = _load_config_file(ADVANCED_CONFIG_FILE)
+        openram_path = advanced_config.get("openram_path", "")
+        is_remote = '@' in openram_path and ':' in openram_path
+
+        source_path_for_download = ""
+        user_host_for_download = ""
+
+        if is_remote:
+            try:
+                user_host, remote_openram_path = openram_path.split(':', 1)
+                user, host = user_host.split('@', 1)
+                remote_output_path = os.path.join(remote_openram_path, output_path_from_config)
+                source_path_for_download = remote_output_path
+                user_host_for_download = user_host
+            except ValueError:
+                file_list.addItem("Invalid remote path format in advanced settings.")
+                QMessageBox.critical(self.ui, "Error", "Invalid remote path format. Use user@host:/path/to/openram")
+                return
+
+            list_files_command = f"ssh -o BatchMode=yes {user_host} 'ls -F {remote_output_path} 2>/dev/null'"
+            try:
+                result = subprocess.run(list_files_command, shell=True, capture_output=True, text=True, timeout=15)
+                if result.returncode == 0:
+                    files = result.stdout.strip().split('\n')
+                    file_list.addItems([f for f in files if f])
+                else:
+                    file_list.addItem(f"Could not list remote directory (or it's empty).")
+                    file_list.addItem(f"Error: {result.stderr.strip()}")
+            except Exception as e:
+                file_list.addItem(f"Error listing remote files: {e}")
+
+        else:  # Local execution
+            source_path_for_download = output_path_from_config
+            try:
+                files = sorted(os.listdir(output_path_from_config))
+                file_list.addItems(files)
+            except FileNotFoundError:
+                file_list.addItem("Output directory not found.")
 
         button_layout = QHBoxLayout()
         download_button = QPushButton("Download Output Folder")
-        download_button.clicked.connect(lambda: self.download_output_folder(output_path))
+        # Pass the necessary info for remote or local download
+        download_button.clicked.connect(lambda: self.download_output_folder(source_path_for_download, user_host_for_download))
         button_layout.addWidget(download_button)
 
         view_gds_button = QPushButton("View GDS")
@@ -231,32 +386,90 @@ class Controller:
 
         self.ui.scroll_area.setWidget(output_widget)
 
-    def download_output_folder(self, output_path):
-        suggested_name = os.path.basename(output_path)
+    def download_output_folder(self, source_path, user_host=""):
+        is_remote = bool(user_host)
+        self.ui.log_output.append("\n--- Starting Download ---")
+        self.ui.log_output.append(f"Source Path: {source_path}")
+        self.ui.log_output.append(f"Is Remote: {is_remote}")
+        if is_remote:
+            self.ui.log_output.append(f"User@Host: {user_host}")
+
+        suggested_name = os.path.basename(source_path.strip('/'))
+        
         home_dir = str(Path.home())
-        initial_path = os.path.join(home_dir, suggested_name)
+        initial_dir = os.path.join(home_dir, "Downloads")
+        if not os.path.isdir(initial_dir):
+            initial_dir = home_dir
+        self.ui.log_output.append(f"Suggested Initial Directory: {initial_dir}")
 
-        destination, _ = QFileDialog.getSaveFileName(self.ui, "Save Output Folder As", initial_path)
+        selected_dir = QFileDialog.getExistingDirectory(self.ui, "Select Destination Folder", initial_dir)
 
-        if destination:
-            if os.path.exists(destination):
-                reply = QMessageBox.question(self.ui, "Destination Exists",
-                                               f"The destination '{destination}' already exists. Do you want to overwrite it?",
-                                               QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-                if reply == QMessageBox.Yes:
-                    try:
+        if not selected_dir:
+            self.ui.log_output.append("Download cancelled by user.")
+            return
+
+        self.ui.log_output.append(f"User selected destination folder: {selected_dir}")
+        destination = os.path.join(selected_dir, suggested_name)
+        self.ui.log_output.append(f"Final destination path: {destination}")
+
+        if os.path.exists(destination):
+            self.ui.log_output.append("Destination path exists. Asking user to overwrite.")
+            reply = QMessageBox.question(self.ui, "Destination Exists",
+                                           f"The destination '{destination}' already exists. Do you want to overwrite it?",
+                                           QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                self.ui.log_output.append("User chose to overwrite.")
+                try:
+                    if os.path.isfile(destination):
+                        os.remove(destination)
+                    elif os.path.isdir(destination):
                         shutil.rmtree(destination)
-                    except Exception as e:
-                        QMessageBox.critical(self.ui, "Error", f"Failed to remove existing folder: {e}")
-                        return
-                else:
-                    return  # User chose not to overwrite
+                    self.ui.log_output.append("Successfully removed existing destination.")
+                except Exception as e:
+                    error_msg = f"Failed to remove existing destination: {e}"
+                    self.ui.log_output.append(f"ERROR: {error_msg}")
+                    QMessageBox.critical(self.ui, "Error", error_msg)
+                    return
+            else:
+                self.ui.log_output.append("User chose not to overwrite. Download cancelled.")
+                return
 
-            try:
-                shutil.copytree(output_path, destination)
-                QMessageBox.information(self.ui, "Success", f"Output folder downloaded successfully to {destination}")
-            except Exception as e:
-                QMessageBox.critical(self.ui, "Error", f"Failed to download folder: {e}")
+        try:
+            if is_remote:
+                self.ui.log_output.append(f"Executing remote download...")
+                remote_source = f"{user_host}:{source_path}"
+                scp_command = ["scp", "-o", "BatchMode=yes", "-r", remote_source, destination]
+                self.ui.log_output.append(f"Running command: {' '.join(scp_command)}")
+                QCoreApplication.processEvents()
+                
+                process = subprocess.run(scp_command, capture_output=True, text=True, check=True, timeout=300)
+                
+                self.ui.log_output.append(f"scp stdout:\n{process.stdout}")
+                self.ui.log_output.append(f"scp stderr:\n{process.stderr}")
+            else:
+                self.ui.log_output.append(f"Executing local copy...")
+                QCoreApplication.processEvents()
+                shutil.copytree(source_path, destination)
+            
+            self.ui.log_output.append("Download completed successfully.")
+            QMessageBox.information(self.ui, "Success", f"Output folder downloaded successfully to {destination}")
+
+        except FileNotFoundError:
+            error_msg = f"Source path not found: {source_path}"
+            self.ui.log_output.append(f"ERROR: {error_msg}")
+            QMessageBox.critical(self.ui, "Error", error_msg)
+        except subprocess.CalledProcessError as e:
+            error_message = f"Failed to download folder using scp.\n"
+            error_message += f"Command: {' '.join(e.args)}\n"
+            error_message += f"Return Code: {e.returncode}\n"
+            error_message += f"Stdout: {e.stdout}\n"
+            error_message += f"Stderr: {e.stderr}"
+            self.ui.log_output.append(f"ERROR: {error_message}")
+            QMessageBox.critical(self.ui, "Error", error_message)
+        except Exception as e:
+            error_msg = f"An unexpected error occurred: {e}"
+            self.ui.log_output.append(f"ERROR: {error_msg}")
+            QMessageBox.critical(self.ui, "Error", error_msg)
 
     def show_advanced_settings(self):
         if self.ui.editor:
