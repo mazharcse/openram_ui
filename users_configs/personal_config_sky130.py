@@ -1,0 +1,11 @@
+num_spare_cols = 1
+num_spare_rows = 1
+num_words = 16
+output_path = 'output_test'
+process_corners = ['TT']
+supply_voltages = [1.8]
+tech_name = 'sky130'
+temperatures = [25]
+use_simulation = False
+word_size = 4
+words_per_row = 1
