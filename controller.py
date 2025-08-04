@@ -321,7 +321,7 @@ class Controller:
 
         output = [
             "<table border='1' cellpadding='5' cellspacing='0'>",
-            "<tr><th>Name</th><th>Last Accessed</th><th>Last Modified</th></tr>"
+            "<tr><th>Config Name</th><th>Last Accessed</th><th>Last Modified</th></tr>"
         ]
 
         for file in path.iterdir():
@@ -359,7 +359,7 @@ class Controller:
         # Build HTML table
         output = [
             "<table border='1' cellpadding='5' cellspacing='0'>",
-            "<tr><th>Name</th><th>Last Accessed</th><th>Last Modified</th></tr>"
+            "<tr><th>Config Name</th><th>Last Accessed</th><th>Last Modified</th></tr>"
         ]
 
         for file in recent_files:

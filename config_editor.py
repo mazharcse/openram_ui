@@ -82,7 +82,8 @@ class ConfigEditor(QWidget):
     def update_save_button_state(self):
         if self.personal_config_path:
             self.save_button.setEnabled(self.is_modified)
-        self.save_as_button.setEnabled(self.is_modified)           
+        self.save_as_button.setEnabled(self.is_modified)      
+        self.clear_button.setEnabled(self.is_modified)     # Enable clear button if modified
 
     def get_config(self):
         config = {}
