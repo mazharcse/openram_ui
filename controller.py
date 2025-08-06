@@ -6,7 +6,7 @@ import tempfile
 import threading
 from PySide6.QtWidgets import QMessageBox, QTextEdit, QInputDialog, QFileDialog, QVBoxLayout, QLabel, QListWidget, \
     QPushButton, QWidget, QHBoxLayout, QLineEdit
-from PySide6.QtCore import QCoreApplication, QProcess, QObject, Signal
+from PySide6.QtCore import QCoreApplication, QProcess, QObject, Signal, QThread
 import paramiko
 
 from config_loader import _load_config_file
@@ -58,6 +58,7 @@ class Controller:
         self.ssh_password = None
         self.remote_worker = None
         self.remote_thread = None
+        self.download_process = None
 
 
     def get_ssh_client(self):
@@ -451,9 +452,9 @@ class Controller:
                 file_list.addItem("Output directory not found.")
 
         button_layout = QHBoxLayout()
-        download_button = QPushButton("Download Output Folder")
-        download_button.clicked.connect(lambda: self.download_output_folder(source_path_for_download, is_remote))
-        button_layout.addWidget(download_button)
+        self.ui.download_button = QPushButton("Download Output Folder")
+        self.ui.download_button.clicked.connect(lambda: self.download_output_folder(source_path_for_download, is_remote))
+        button_layout.addWidget(self.ui.download_button)
 
         view_gds_button = QPushButton("View GDS")
         view_gds_button.clicked.connect(self.view_gds)
@@ -469,6 +470,10 @@ class Controller:
         self.ui.scroll_area.setWidget(output_widget)
 
     def download_output_folder(self, source_path, is_remote):
+        if self.download_process and self.download_process.state() != QProcess.NotRunning:
+            QMessageBox.warning(self.ui, "Warning", "A download is already in progress.")
+            return
+
         self.ui.log_output.append("\n--- Starting Download ---")
         self.ui.log_output.append(f"Source Path: {source_path}")
         self.ui.log_output.append(f"Is Remote: {is_remote}")
@@ -504,41 +509,72 @@ class Controller:
             else:
                 return
 
-        try:
-            if is_remote:
-                ssh = self.get_ssh_client()
-                if not ssh:
-                    return
+        # Disable download button while downloading
+        self.ui.download_button.setEnabled(False)
+        self.ui.download_button.setText("Downloading...")
+
+        if is_remote:
+            advanced_config = _load_config_file(ADVANCED_CONFIG_FILE)
+            openram_path = advanced_config.get("openram_path", "")
+            try:
+                user_host, _ = openram_path.split(':', 1)
+                user, host = user_host.split('@', 1)
+                if not self.ssh_password:
+                    password, ok = QInputDialog.getText(self.ui, "SSH Password", f"Enter password for {user}@{host}:", QLineEdit.Password)
+                    if not ok:
+                        self.ui.log_output.append("SSH password not provided. Download cancelled.")
+                        self.ui.download_button.setEnabled(True)
+                        self.ui.download_button.setText("Download Output Folder")
+                        return
+                    self.ssh_password = password
                 
-                sftp = ssh.open_sftp()
+                # Start the external downloader process
+                self.download_process = QProcess()
+                self.download_process.setProcessChannelMode(QProcess.MergedChannels)
+                self.download_process.readyReadStandardOutput.connect(self._append_log)
+                self.download_process.finished.connect(self.on_download_process_finished)
                 
-                # Walk the remote directory and download files
-                os.makedirs(destination, exist_ok=True)
-                for item in sftp.listdir_attr(source_path):
-                    remote_item_path = os.path.join(source_path, item.filename)
-                    local_item_path = os.path.join(destination, item.filename)
-                    if item.st_mode & 0o40000: # Check if it is a directory
-                        self.download_remote_directory(sftp, remote_item_path, local_item_path)
-                    else:
-                        sftp.get(remote_item_path, local_item_path)
-                sftp.close()
-            else:
+                command = ["python3", os.path.join(os.path.dirname(__file__), "remote_downloader.py"),
+                           source_path, destination, host, user]
+                
+                environment = self.download_process.processEnvironment()
+                if self.ssh_password:
+                    environment.insert("SSH_PASSWORD", self.ssh_password)
+                self.download_process.setProcessEnvironment(environment)
+
+                self.ui.log_output.append(f"Starting remote download process: {' '.join(command)}")
+                self.download_process.start("python3", command[1:]) # Pass arguments as list
+            except ValueError:
+                QMessageBox.critical(self.ui, "Error", "Invalid remote path format in advanced settings. Use user@host:/path/to/openram")
+                self.ui.download_button.setEnabled(True)
+                self.ui.download_button.setText("Download Output Folder")
+                return
+        else:
+            try:
+                self.ui.log_output.append(f"Copying local folder {source_path} to {destination}...")
                 shutil.copytree(source_path, destination)
-            
-            QMessageBox.information(self.ui, "Success", f"Output folder downloaded successfully to {destination}")
+                QMessageBox.information(self.ui, "Success", f"Output folder downloaded successfully to {destination}")
+            except Exception as e:
+                QMessageBox.critical(self.ui, "Error", f"An unexpected error occurred during local download: {e}")
+            finally:
+                self.ui.download_button.setEnabled(True)
+                self.ui.download_button.setText("Download Output Folder")
 
-        except Exception as e:
-            QMessageBox.critical(self.ui, "Error", f"An unexpected error occurred during download: {e}")
+    def on_download_process_finished(self, exitCode, exitStatus):
+        self.ui.download_button.setEnabled(True)
+        self.ui.download_button.setText("Download Output Folder")
+        
+        output = self.download_process.readAllStandardOutput().data().decode(errors='replace')
+        if output:
+            self.ui.log_output.append(output.strip())
 
-    def download_remote_directory(self, sftp, remote_dir, local_dir):
-        os.makedirs(local_dir, exist_ok=True)
-        for item in sftp.listdir_attr(remote_dir):
-            remote_item_path = os.path.join(remote_dir, item.filename)
-            local_item_path = os.path.join(local_dir, item.filename)
-            if item.st_mode & 0o40000:
-                self.download_remote_directory(sftp, remote_item_path, local_item_path)
-            else:
-                sftp.get(remote_item_path, local_item_path)
+        if exitCode == 0:
+            QMessageBox.information(self.ui, "Success", f"Output folder downloaded successfully.")
+        else:
+            QMessageBox.critical(self.ui, "Error", f"Download process failed with exit code {exitCode}.")
+        
+        self.ui.log_output.append(f"\n--- Download Finished ---")
+        self.download_process = None
 
     def show_advanced_settings(self):
         if self.ui.editor:
