@@ -1,6 +1,6 @@
 # advanced_config_editor.py
 from PySide6.QtWidgets import (QWidget, QFormLayout, QLineEdit, QPushButton, QVBoxLayout, 
-                             QFileDialog, QHBoxLayout, QMessageBox, QListWidget)
+                             QFileDialog, QHBoxLayout, QMessageBox, QListWidget, QInputDialog)
 from PySide6.QtCore import Qt, QDir
 import ast
 import os
@@ -8,6 +8,7 @@ from config_loader import _load_config_file
 from constants import ADVANCED_CONFIG_FILE, TECHNOLOGY_PATH, OPENRAM_PATH, TECHNOLOGY_FILE
 import shutil
 import subprocess
+import paramiko
 
 
 class AdvancedConfigEditor(QWidget):
@@ -54,12 +55,22 @@ class AdvancedConfigEditor(QWidget):
                 tech_layout.addWidget(list_widget)
                 tech_layout.addWidget(upload_button)
                 self.form.addRow(key, tech_layout)
+            
+            elif key in ["ssh_host", "ssh_user", "ssh_password"]:
+                # We will handle these separately
+                continue
 
             else:
                 field = QLineEdit(str(value))
                 self.fields[key] = field
                 self.form.addRow(key, field)
                 field.textChanged.connect(self.set_modified)
+        
+        self.test_ssh_button = QPushButton("Test SSH Connection")
+        self.test_ssh_button.clicked.connect(self.test_ssh_connection)
+        
+        self.layout.addWidget(self.test_ssh_button)
+
 
         self.layout.addLayout(self.form)
 
@@ -73,6 +84,34 @@ class AdvancedConfigEditor(QWidget):
 
         self.save_button.clicked.connect(self._save_config)
         self.clear_button.clicked.connect(self.clear_changes)
+
+    def test_ssh_connection(self):
+        openram_path = self.fields[OPENRAM_PATH].text()
+
+        if not openram_path:
+            QMessageBox.warning(self, "Missing Information", "Please fill in OpenRAM Path.")
+            return
+        
+        try:
+            user_host, remote_path = openram_path.split(':', 1)
+            user, host = user_host.split('@', 1)
+        except ValueError:
+            QMessageBox.critical(self, "Error", "Invalid remote path format. Use user@host:/path/to/openram")
+            return
+
+        password, ok = QInputDialog.getText(self, "SSH Password", f"Enter password for {user}@{host}:", QLineEdit.Password)
+
+        if not ok:
+            return # User cancelled
+
+        try:
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(host, username=user, password=password, timeout=5)
+            client.close()
+            QMessageBox.information(self, "Success", "SSH connection successful!")
+        except Exception as e:
+            QMessageBox.critical(self, "Connection Failed", f"Failed to connect: {e}")
 
     def populate_tech_list(self, list_widget: QListWidget):
         list_widget.clear()
