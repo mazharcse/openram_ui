@@ -519,6 +519,10 @@ class Controller:
             try:
                 user_host, _ = openram_path.split(':', 1)
                 user, host = user_host.split('@', 1)
+                
+                command = ["python3", os.path.join(os.path.dirname(__file__), "remote_downloader.py"),
+                           source_path, destination, host, user]
+
                 if not self.ssh_password:
                     password, ok = QInputDialog.getText(self.ui, "SSH Password", f"Enter password for {user}@{host}:", QLineEdit.Password)
                     if not ok:
@@ -531,11 +535,8 @@ class Controller:
                 # Start the external downloader process
                 self.download_process = QProcess()
                 self.download_process.setProcessChannelMode(QProcess.MergedChannels)
-                self.download_process.readyReadStandardOutput.connect(self._append_log)
+                self.download_process.readyReadStandardOutput.connect(self._on_download_output_ready)
                 self.download_process.finished.connect(self.on_download_process_finished)
-                
-                command = ["python3", os.path.join(os.path.dirname(__file__), "remote_downloader.py"),
-                           source_path, destination, host, user]
                 
                 environment = self.download_process.processEnvironment()
                 if self.ssh_password:
@@ -559,6 +560,10 @@ class Controller:
             finally:
                 self.ui.download_button.setEnabled(True)
                 self.ui.download_button.setText("Download Output Folder")
+
+    def _on_download_output_ready(self):
+        output = self.download_process.readAllStandardOutput().data().decode(errors='replace')
+        self._append_log(output.strip())
 
     def on_download_process_finished(self, exitCode, exitStatus):
         self.ui.download_button.setEnabled(True)
