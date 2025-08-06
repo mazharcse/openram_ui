@@ -115,7 +115,7 @@ class AdvancedConfigEditor(QWidget):
 
     def populate_tech_list(self, list_widget: QListWidget):
         list_widget.clear()
-        
+
         openram_path_field = self.fields.get(OPENRAM_PATH)
         openram_path = openram_path_field.text() if openram_path_field else ""
         is_remote = '@' in openram_path and ':' in openram_path
@@ -124,13 +124,32 @@ class AdvancedConfigEditor(QWidget):
         if is_remote:
             try:
                 user_host, remote_openram_path = openram_path.split(':', 1)
+                user, host = user_host.split('@', 1)
                 remote_tech_file = os.path.join(remote_openram_path, os.path.basename(TECHNOLOGY_FILE))
+
+                # Prompt for password
+                password, ok = QInputDialog.getText(self, "SSH Password", f"Enter password for {user}@{host}:", QLineEdit.Password)
+                if not ok:
+                    return # User cancelled
+
+                # Use Paramiko to fetch the file content
+                client = paramiko.SSHClient()
+                client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                client.connect(host, username=user, password=password, timeout=5)
                 
-                cat_command = f"ssh -o BatchMode=yes {user_host} 'cat {remote_tech_file}'"
-                result = subprocess.run(cat_command, shell=True, capture_output=True, text=True, check=True)
-                techs = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
-            except subprocess.CalledProcessError as e:
-                QMessageBox.warning(self, "Warning", f"Could not read remote technology file. It may not exist yet.\nError: {e.stderr}")
+                stdin, stdout, stderr = client.exec_command(f'cat {remote_tech_file}')
+                
+                exit_status = stdout.channel.recv_exit_status()
+                if exit_status == 0:
+                    techs = [line.strip() for line in stdout.read().decode().strip().split('\n') if line.strip()]
+                else:
+                    error_message = stderr.read().decode().strip()
+                    if not error_message:
+                        error_message = f"File not found or permission issue on remote server. Exit code: {exit_status}"
+                    QMessageBox.warning(self, "Warning", f"Could not read remote technology file.\nError: {error_message}")
+
+                client.close()
+
             except Exception as e:
                 QMessageBox.warning(self, "Warning", f"An error occurred while fetching remote technologies: {e}")
         else:
@@ -226,56 +245,84 @@ class AdvancedConfigEditor(QWidget):
         if is_remote:
             try:
                 user_host, remote_openram_path = openram_path.split(':', 1)
+                user, host = user_host.split('@', 1)
             except ValueError:
                 QMessageBox.critical(self, "Error", "Invalid remote path format. Use user@host:/path/to/openram")
                 return
 
+            password, ok = QInputDialog.getText(self, "SSH Password", f"Enter password for {user}@{host}:", QLineEdit.Password)
+            if not ok:
+                return # User cancelled
+
             remote_tech_base_path = os.path.join(remote_openram_path, TECHNOLOGY_PATH)
             remote_target_path = os.path.join(remote_tech_base_path, folder_name)
-            
-            # 1. Use SSH to check if the folder exists and ask to overwrite
-            check_exists_command = f"ssh -o BatchMode=yes {user_host} '[ -d {remote_target_path} ]'"
+
             try:
-                result = subprocess.run(check_exists_command, shell=True, capture_output=True)
-                if result.returncode == 0: # Directory exists
-                    reply = QMessageBox.question(self, "Folder Exists", 
+                client = paramiko.SSHClient()
+                client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                client.connect(host, username=user, password=password, timeout=5)
+                sftp = client.open_sftp()
+
+                # 1. Check if the folder exists and ask to overwrite
+                try:
+                    sftp.stat(remote_target_path)
+                    # If stat succeeds, directory exists
+                    reply = QMessageBox.question(self, "Folder Exists",
                                                    f"The remote technology '{folder_name}' already exists. Overwrite?",
                                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
                     if reply == QMessageBox.No:
+                        client.close()
                         return
                     # If yes, remove the remote directory first
-                    rm_command = f"ssh -o BatchMode=yes {user_host} 'rm -rf {remote_target_path}'"
-                    subprocess.run(rm_command, shell=True, check=True, capture_output=True)
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed during remote check/remove: {e}")
-                return
+                    stdin, stdout, stderr = client.exec_command(f'rm -rf {remote_target_path}')
+                    exit_status = stdout.channel.recv_exit_status()
+                    if exit_status != 0:
+                        raise Exception(f"Failed to remove remote directory: {stderr.read().decode()}")
+                except FileNotFoundError:
+                    # This is good, the directory doesn't exist
+                    pass
 
-            # 2. Use SCP to upload the folder
-            try:
+                # 2. Create the base directory and upload the folder recursively
+                try:
+                    sftp.stat(remote_tech_base_path)
+                except FileNotFoundError:
+                    sftp.mkdir(remote_tech_base_path)
+                
                 QMessageBox.information(self, "Uploading", f"Uploading folder to {user_host}:{remote_target_path}")
-                scp_command = ["scp", "-o", "BatchMode=yes", "-r", folder_path, f"{user_host}:{remote_target_path}"]
-                subprocess.run(scp_command, check=True, capture_output=True, text=True)
-            except subprocess.CalledProcessError as e:
-                QMessageBox.critical(self, "Error", f"Failed to upload folder via scp:\n{e.stderr}")
-                return
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"An unexpected error occurred during upload:\n{e}")
-                return
+                
+                # Create top-level directory for the PDK
+                sftp.mkdir(remote_target_path)
 
-            # 3. Use SSH to update the remote technology.txt
-            try:
+                for dirpath, _, filenames in os.walk(folder_path):
+                    remote_dirpath = os.path.join(remote_target_path, os.path.relpath(dirpath, folder_path)).replace("\\", "/")
+                    for filename in filenames:
+                        local_file_path = os.path.join(dirpath, filename)
+                        remote_file_path = os.path.join(remote_dirpath, filename).replace("\\", "/")
+                        # Ensure remote subdirectory exists
+                        try:
+                            sftp.stat(remote_dirpath)
+                        except FileNotFoundError:
+                            sftp.mkdir(remote_dirpath)
+                        sftp.put(local_file_path, remote_file_path)
+
+                # 3. Update the remote technology.txt
                 remote_tech_file = os.path.join(remote_openram_path, os.path.basename(TECHNOLOGY_FILE))
-                # This command safely checks if the line exists before appending
-                append_command = f"""ssh -o BatchMode=yes {user_host} "grep -qxF '{folder_name}' {remote_tech_file} || echo '{folder_name}' >> {remote_tech_file}" """
-                subprocess.run(append_command, shell=True, check=True, capture_output=True)
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to update remote technology.txt: {e}")
-                return
+                append_command = f"grep -qxF '{folder_name}' {remote_tech_file} || echo '{folder_name}' >> {remote_tech_file}"
+                stdin, stdout, stderr = client.exec_command(append_command)
+                exit_status = stdout.channel.recv_exit_status()
+                if exit_status != 0:
+                     raise Exception(f"Failed to update remote technology.txt: {stderr.read().decode()}")
 
-            QMessageBox.information(self, "Success", f"Folder uploaded to:\n{user_host}:{remote_target_path}")
-            # Refresh the list, which will now fetch from the remote.
-            self.populate_tech_list(list_widget)
-            self.set_modified()
+                client.close()
+                QMessageBox.information(self, "Success", f"Folder uploaded to:\n{user_host}:{remote_target_path}")
+                self.populate_tech_list(list_widget)
+                self.set_modified()
+
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"An error occurred during the remote operation:\n{e}")
+                if 'client' in locals() and client.get_transport() and client.get_transport().is_active():
+                    client.close()
+                return
 
         else: # Local upload logic
             if not os.path.isdir(openram_path):
