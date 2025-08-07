@@ -543,20 +543,20 @@ class Controller:
         table = self._get_file_properties_as_table(USERS_CONFIG_DIR)
         layout.addWidget(table)
 
-        # Advanced Settings
-        advanced_config_content = ""
-        try:
-            advanced_config = _load_config_file(ADVANCED_CONFIG_FILE)
-            advanced_config_content = "<br><br><b>--- Current Advanced Settings ---</b><br>"
-            for key, value in advanced_config.items():
-                advanced_config_content += f"{key} = {value}<br>"
-        except FileNotFoundError:
-            advanced_config_content = "\n\nAdvanced config file not found."
-        except Exception as e:
-            advanced_config_content = f"\n\nError loading advanced config: {e}"
+        # # Advanced Settings
+        # advanced_config_content = ""
+        # try:
+        #     advanced_config = _load_config_file(ADVANCED_CONFIG_FILE)
+        #     advanced_config_content = "<br><br><b>--- Current Advanced Settings ---</b><br>"
+        #     for key, value in advanced_config.items():
+        #         advanced_config_content += f"{key} = {value}<br>"
+        # except FileNotFoundError:
+        #     advanced_config_content = "\n\nAdvanced config file not found."
+        # except Exception as e:
+        #     advanced_config_content = f"\n\nError loading advanced config: {e}"
 
-        advanced_settings_label = QLabel(advanced_config_content)
-        layout.addWidget(advanced_settings_label)
+        # advanced_settings_label = QLabel(advanced_config_content)
+        # layout.addWidget(advanced_settings_label)
 
         self.ui.scroll_area.setWidget(home_widget)
 
@@ -597,6 +597,6 @@ class Controller:
             table.setCellWidget(i, 3, view_button)
 
         header = table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Stretch)
+        header.setSectionResizeMode(QHeaderView.Stretch)        
 
         return table
