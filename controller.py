@@ -395,78 +395,71 @@ class Controller:
             QMessageBox.warning(self.ui, "Warning", "A download is already in progress.")
             return
 
-        self.ui.log_output.append("\n--- Starting Download ---")
-        self.ui.log_output.append(f"Source Path: {source_path}")
-        self.ui.log_output.append(f"Is Remote: {is_remote}")
-
-        suggested_name = os.path.basename(source_path.strip('/'))
+        suggested_name = os.path.basename(source_path.strip('/')) + ".zip"
         
         home_dir = str(Path.home())
         initial_dir = os.path.join(home_dir, "Downloads")
         if not os.path.isdir(initial_dir):
             initial_dir = home_dir
         
-        selected_dir = QFileDialog.getExistingDirectory(self.ui, "Select Destination Folder", initial_dir)
+        save_path, _ = QFileDialog.getSaveFileName(self.ui, "Save Zip File", os.path.join(initial_dir, suggested_name), "Zip Files (*.zip)")
 
-        if not selected_dir:
+        if not save_path:
             self.ui.log_output.append("Download cancelled by user.")
             return
 
-        destination = os.path.join(selected_dir, suggested_name)
-
-        if os.path.exists(destination):
-            reply = QMessageBox.question(self.ui, "Destination Exists",
-                                           f"The destination '{destination}' already exists. Do you want to overwrite it?",
-                                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if reply == QMessageBox.Yes:
-                try:
-                    if os.path.isfile(destination):
-                        os.remove(destination)
-                    elif os.path.isdir(destination):
-                        shutil.rmtree(destination)
-                except Exception as e:
-                    QMessageBox.critical(self.ui, "Error", f"Failed to remove existing destination: {e}")
-                    return
-            else:
-                return
-
-        # Disable download button while downloading
         self.ui.download_button.setEnabled(False)
-        self.ui.download_button.setText("Downloading...")
+        self.ui.download_button.setText("Zipping...")
+        self.ui.log_output.append("\n--- Starting Download ---")
 
         if is_remote:
+            self.ui.log_output.append(f"Zipping remote folder: {source_path}")
+            
             advanced_config = _load_config_file(ADVANCED_CONFIG_FILE)
             openram_path = advanced_config.get("openram_path", "")
             try:
                 user_host, _ = openram_path.split(':', 1)
                 user, host = user_host.split('@', 1)
+
+                remote_zip_path = f"/tmp/{os.path.basename(source_path)}.zip"
                 
-                command = ["python3", os.path.join(os.path.dirname(__file__), "remote_downloader.py"),
-                           source_path, destination, host, user]
+                # Command to zip the folder on the remote server
+                zip_command = f"cd {os.path.dirname(source_path)} && zip -r {remote_zip_path} {os.path.basename(source_path)}"
+                
+                ssh_zip_command = ["ssh", "-i", os.path.join(os.path.dirname(__file__), "openram_key"), f"{user}@{host}", zip_command]
 
-                command = ["python3", os.path.join(os.path.dirname(__file__), "remote_downloader.py"),
-                           source_path, destination, host, user]
+                # Run zipping process
+                process = subprocess.run(ssh_zip_command, capture_output=True, text=True)
+                if process.returncode != 0:
+                    QMessageBox.critical(self, "Error", f"Failed to zip remote folder: {process.stderr}")
+                    self.ui.download_button.setEnabled(True)
+                    self.ui.download_button.setText("Download Output Folder")
+                    return
 
-                # Start the external downloader process
+                self.ui.log_output.append("Zipping complete. Starting download...")
+                self.ui.download_button.setText("Downloading...")
+
+                # Command to download the zip file
+                scp_command = ["scp", "-i", os.path.join(os.path.dirname(__file__), "openram_key"), f"{user}@{host}:{remote_zip_path}", save_path]
+
                 self.download_process = QProcess()
                 self.download_process.setProcessChannelMode(QProcess.MergedChannels)
                 self.download_process.readyReadStandardOutput.connect(self._on_download_output_ready)
-                self.download_process.finished.connect(self.on_download_process_finished)
-                
-                self.ui.log_output.append(f"Starting remote download process: {' '.join(command)}")
-                self.download_process.start("python3", command[1:]) # Pass arguments as list
-            except ValueError:
-                QMessageBox.critical(self.ui, "Error", "Invalid remote path format in advanced settings. Use user@host:/path/to/openram")
+                self.download_process.finished.connect(lambda code, status: self.on_download_process_finished(code, status, remote_zip_path=remote_zip_path))
+                self.download_process.start("scp", scp_command[1:])
+
+            except Exception as e:
+                QMessageBox.critical(self.ui, "Error", f"An unexpected error occurred: {e}")
                 self.ui.download_button.setEnabled(True)
                 self.ui.download_button.setText("Download Output Folder")
-                return
-        else:
+
+        else: # Local zipping
             try:
-                self.ui.log_output.append(f"Copying local folder {source_path} to {destination}...")
-                shutil.copytree(source_path, destination)
-                QMessageBox.information(self.ui, "Success", f"Output folder downloaded successfully to {destination}")
+                self.ui.log_output.append(f"Zipping local folder {source_path} to {save_path}...")
+                shutil.make_archive(os.path.splitext(save_path)[0], 'zip', source_path)
+                QMessageBox.information(self.ui, "Success", f"Output folder zipped successfully to {save_path}")
             except Exception as e:
-                QMessageBox.critical(self.ui, "Error", f"An unexpected error occurred during local download: {e}")
+                QMessageBox.critical(self.ui, "Error", f"An unexpected error occurred during local zipping: {e}")
             finally:
                 self.ui.download_button.setEnabled(True)
                 self.ui.download_button.setText("Download Output Folder")
@@ -475,7 +468,7 @@ class Controller:
         output = self.download_process.readAllStandardOutput().data().decode(errors='replace')
         self._append_log(output.strip())
 
-    def on_download_process_finished(self, exitCode, exitStatus):
+    def on_download_process_finished(self, exitCode, exitStatus, remote_zip_path=None):
         self.ui.download_button.setEnabled(True)
         self.ui.download_button.setText("Download Output Folder")
         
@@ -485,6 +478,20 @@ class Controller:
 
         if exitCode == 0:
             QMessageBox.information(self.ui, "Success", f"Output folder downloaded successfully.")
+            if remote_zip_path:
+                # Clean up the remote zip file
+                try:
+                    advanced_config = _load_config_file(ADVANCED_CONFIG_FILE)
+                    openram_path = advanced_config.get("openram_path", "")
+                    user_host, _ = openram_path.split(':', 1)
+                    user, host = user_host.split('@', 1)
+                    
+                    rm_command = f"rm {remote_zip_path}"
+                    ssh_rm_command = ["ssh", "-i", os.path.join(os.path.dirname(__file__), "openram_key"), f"{user}@{host}", rm_command]
+                    subprocess.run(ssh_rm_command)
+                    self.ui.log_output.append(f"Cleaned up remote file: {remote_zip_path}")
+                except Exception as e:
+                    self.ui.log_output.append(f"Warning: Failed to clean up remote zip file: {e}")
         else:
             QMessageBox.critical(self.ui, "Error", f"Download process failed with exit code {exitCode}.")
         
