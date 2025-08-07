@@ -99,17 +99,20 @@ class AdvancedConfigEditor(QWidget):
             QMessageBox.critical(self, "Error", "Invalid remote path format. Use user@host:/path/to/openram")
             return
 
-        password, ok = QInputDialog.getText(self, "SSH Password", f"Enter password for {user}@{host}:", QLineEdit.Password)
-
-        if not ok:
-            return # User cancelled
+        ssh_key_path = os.path.join(os.path.dirname(__file__), "openram_key")
+        if not os.path.exists(ssh_key_path):
+            QMessageBox.critical(self, "Error", f"SSH key file not found: {ssh_key_path}")
+            return
 
         try:
+            key = paramiko.RSAKey.from_private_key_file(ssh_key_path)
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(host, username=user, password=password, timeout=5)
+            client.connect(host, username=user, pkey=key, timeout=5)
             client.close()
             QMessageBox.information(self, "Success", "SSH connection successful!")
+        except paramiko.AuthenticationException:
+            QMessageBox.critical(self, "Connection Failed", "Authentication failed. Check your SSH key and permissions.")
         except Exception as e:
             QMessageBox.critical(self, "Connection Failed", f"Failed to connect: {e}")
 
@@ -127,15 +130,15 @@ class AdvancedConfigEditor(QWidget):
                 user, host = user_host.split('@', 1)
                 remote_tech_file = os.path.join(remote_openram_path, os.path.basename(TECHNOLOGY_FILE))
 
-                # Prompt for password
-                password, ok = QInputDialog.getText(self, "SSH Password", f"Enter password for {user}@{host}:", QLineEdit.Password)
-                if not ok:
-                    return # User cancelled
+                ssh_key_path = os.path.join(os.path.dirname(__file__), "openram_key")
+                if not os.path.exists(ssh_key_path):
+                    QMessageBox.critical(self, "Error", f"SSH key file not found: {ssh_key_path}")
+                    return
 
-                # Use Paramiko to fetch the file content
+                key = paramiko.RSAKey.from_private_key_file(ssh_key_path)
                 client = paramiko.SSHClient()
                 client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                client.connect(host, username=user, password=password, timeout=5)
+                client.connect(host, username=user, pkey=key, timeout=5)
                 
                 stdin, stdout, stderr = client.exec_command(f'cat {remote_tech_file}')
                 
@@ -250,17 +253,16 @@ class AdvancedConfigEditor(QWidget):
                 QMessageBox.critical(self, "Error", "Invalid remote path format. Use user@host:/path/to/openram")
                 return
 
-            password, ok = QInputDialog.getText(self, "SSH Password", f"Enter password for {user}@{host}:", QLineEdit.Password)
-            if not ok:
-                return # User cancelled
-
-            remote_tech_base_path = os.path.join(remote_openram_path, TECHNOLOGY_PATH)
-            remote_target_path = os.path.join(remote_tech_base_path, folder_name)
+            ssh_key_path = os.path.join(os.path.dirname(__file__), "openram_key")
+            if not os.path.exists(ssh_key_path):
+                QMessageBox.critical(self, "Error", f"SSH key file not found: {ssh_key_path}")
+                return
 
             try:
+                key = paramiko.RSAKey.from_private_key_file(ssh_key_path)
                 client = paramiko.SSHClient()
                 client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                client.connect(host, username=user, password=password, timeout=5)
+                client.connect(host, username=user, pkey=key, timeout=5)
                 sftp = client.open_sftp()
 
                 # 1. Check if the folder exists and ask to overwrite

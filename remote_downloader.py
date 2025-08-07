@@ -1,18 +1,6 @@
-import os
 import sys
-import paramiko
-import shutil
-
-def download_remote_directory(sftp, remote_dir, local_dir):
-    os.makedirs(local_dir, exist_ok=True)
-    for item in sftp.listdir_attr(remote_dir):
-        remote_item_path = os.path.join(remote_dir, item.filename)
-        local_item_path = os.path.join(local_dir, item.filename)
-        if item.st_mode & 0o40000: # Check if it is a directory
-            download_remote_directory(sftp, remote_item_path, local_item_path)
-        else:
-            sys.stdout.write(f"Downloading {item.filename}...\n")
-            sftp.get(remote_item_path, local_item_path)
+import subprocess
+import os
 
 def main():
     if len(sys.argv) < 5:
@@ -23,42 +11,32 @@ def main():
     destination = sys.argv[2]
     host = sys.argv[3]
     user = sys.argv[4]
-    password = os.environ.get('SSH_PASSWORD')
+    ssh_key_path = os.path.join(os.path.dirname(__file__), "openram_key")
 
-    ssh = None
-    sftp = None
-    try:
-        sys.stdout.write(f"Connecting to {user}@{host}...\n")
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(host, username=user, password=password, timeout=10)
-        ssh = client
-        sys.stdout.write("SSH connection established.\n")
-
-        sftp = ssh.open_sftp()
-        sys.stdout.write(f"Starting download from {source_path} to {destination}\n")
-        
-        os.makedirs(destination, exist_ok=True)
-        for item in sftp.listdir_attr(source_path):
-            remote_item_path = os.path.join(source_path, item.filename)
-            local_item_path = os.path.join(destination, item.filename)
-            if item.st_mode & 0o40000: # Check if it is a directory
-                download_remote_directory(sftp, remote_item_path, local_item_path)
-            else:
-                sys.stdout.write(f"Downloading {item.filename}...\n")
-                sftp.get(remote_item_path, local_item_path)
-
-        sys.stdout.write(f"Download complete to {destination}\n")
-        sys.exit(0)
-
-    except Exception as e:
-        sys.stderr.write(f"Error during download: {e}\n")
+    if not os.path.exists(ssh_key_path):
+        sys.stderr.write(f"Error: SSH key file not found: {ssh_key_path}\n")
         sys.exit(1)
-    finally:
-        if sftp:
-            sftp.close()
-        if ssh:
-            ssh.close()
+
+    command = [
+        "scp",
+        "-r",
+        "-i", ssh_key_path,
+        f"{user}@{host}:{source_path}",
+        destination
+    ]
+
+    try:
+        sys.stdout.write(f"Starting download from {user}@{host}:{source_path} to {destination}\n")
+        process = subprocess.run(command, check=True, capture_output=True, text=True)
+        sys.stdout.write("Download complete.\n")
+        if process.stdout:
+            sys.stdout.write(process.stdout)
+        if process.stderr:
+            sys.stderr.write(process.stderr)
+        sys.exit(0)
+    except subprocess.CalledProcessError as e:
+        sys.stderr.write(f"Error during download: {e.stderr}\n")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

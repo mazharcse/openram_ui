@@ -3,11 +3,8 @@ import shutil
 import subprocess
 import glob
 import tempfile
-import threading
-from PySide6.QtWidgets import QMessageBox, QTextEdit, QInputDialog, QFileDialog, QVBoxLayout, QLabel, QListWidget, \
-    QPushButton, QWidget, QHBoxLayout, QLineEdit
+from PySide6.QtWidgets import QMessageBox, QTextEdit, QInputDialog, QFileDialog, QVBoxLayout, QLabel, QListWidget,     QPushButton, QWidget, QHBoxLayout, QLineEdit
 from PySide6.QtCore import QCoreApplication, QProcess, QObject, Signal, QThread
-import paramiko
 
 from config_loader import _load_config_file
 from config_editor import ConfigEditor
@@ -19,34 +16,6 @@ from pathlib import Path
 import time
 
 
-class RemoteRunWorker(QObject):
-    log_message = Signal(str)
-    finished = Signal(int)
-
-    def __init__(self, ssh_client, remote_command):
-        super().__init__()
-        self.ssh_client = ssh_client
-        self.remote_command = remote_command
-
-    def run(self):
-        try:
-            stdin, stdout, stderr = self.ssh_client.exec_command(self.remote_command)
-
-            for line in iter(stdout.readline, ""):
-                self.log_message.emit(line.strip())
-
-            exit_code = stdout.channel.recv_exit_status()
-            
-            error_output = stderr.read().decode().strip()
-            if error_output:
-                self.log_message.emit(f"--- STDERR ---\n{error_output}")
-
-            self.finished.emit(exit_code)
-        except Exception as e:
-            self.log_message.emit(f"An error occurred during remote execution: {e}")
-            self.finished.emit(-1)
-
-
 class Controller:
     def __init__(self, ui):
         self.ui = ui
@@ -54,53 +23,8 @@ class Controller:
         self.config_path = None
         self.process = None
         self.temp_script_path = None
-        self.ssh_client = None
-        self.ssh_password = None
-        self.remote_worker = None
-        self.remote_thread = None
         self.download_process = None
 
-
-    def get_ssh_client(self):
-        if self.ssh_client:
-            try:
-                # Check if the connection is still active
-                self.ssh_client.exec_command('ls', timeout=5)
-                return self.ssh_client
-            except Exception:
-                self.ssh_client.close()
-                self.ssh_client = None
-
-        advanced_config = _load_config_file(ADVANCED_CONFIG_FILE)
-        openram_path = advanced_config.get("openram_path")
-
-        if not openram_path:
-            QMessageBox.critical(self.ui, "Error", "OpenRAM path must be set in advanced settings.")
-            return None
-
-        try:
-            user_host, remote_path = openram_path.split(':', 1)
-            user, host = user_host.split('@', 1)
-        except ValueError:
-            QMessageBox.critical(self.ui, "Error", "Invalid remote path format. Use user@host:/path/to/openram")
-            return None
-
-        if not self.ssh_password:
-            password, ok = QInputDialog.getText(self.ui, "SSH Password", f"Enter password for {user}@{host}:", QLineEdit.Password)
-            if not ok:
-                return None # User cancelled
-            self.ssh_password = password
-
-        try:
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(host, username=user, password=self.ssh_password, timeout=10)
-            self.ssh_client = client
-            return self.ssh_client
-        except Exception as e:
-            QMessageBox.critical(self.ui, "SSH Connection Failed", f"Failed to connect: {e}")
-            self.ssh_password = None # Clear password on failure
-            return None
 
     def _create_temp_script(self, command_to_run):
         """Creates a temporary shell script to run a command in the OpenRAM environment."""
@@ -178,8 +102,7 @@ class Controller:
                 self.ui.editor.save_config(path)
 
     def run_openram(self):
-        if (self.process and self.process.state() != QProcess.NotRunning) or \
-           (self.remote_thread and self.remote_thread.is_alive()):
+        if self.process and self.process.state() != QProcess.NotRunning:
             QMessageBox.warning(self.ui, "Warning", "An OpenRAM process is already running.")
             return
 
@@ -207,14 +130,9 @@ class Controller:
         if is_remote:
             self.ui.log_output.append("Remote OpenRAM path detected.")
             
-            ssh = self.get_ssh_client()
-            if not ssh:
-                self.ui.run_button.setEnabled(True)
-                self.ui.run_button.setText("Run OpenRAM")
-                return
-
             try:
                 user_host, remote_path = openram_path.split(':', 1)
+                user, host = user_host.split('@', 1)
             except ValueError:
                 QMessageBox.critical(self.ui, "Error", "Invalid remote path format in advanced settings. Use user@host:/path/to/openram")
                 self.ui.run_button.setEnabled(True)
@@ -222,35 +140,50 @@ class Controller:
                 return
 
             remote_temp_config_name = os.path.basename(self.config_path)
-            remote_temp_config_path = f"/tmp/{remote_temp_config_name}"
             
+            # Upload config file
+            scp_command = [
+                "scp",
+                "-i", os.path.join(os.path.dirname(__file__), "openram_key"),
+                self.config_path,
+                f"{user}@{host}:{remote_temp_config_name}"
+            ]
             try:
-                sftp = ssh.open_sftp()
-                sftp.put(self.config_path, remote_temp_config_path)
-                sftp.close()
-                self.ui.log_output.append(f"Uploaded config to {remote_temp_config_path}")
-            except Exception as e:
-                QMessageBox.critical(self.ui, "SFTP Error", f"Failed to upload config file: {e}")
+                process = subprocess.run(scp_command, check=True, capture_output=True, text=True)
+                self.ui.log_output.append(f"Uploaded config to ~/{remote_temp_config_name}")
+            except subprocess.CalledProcessError as e:
+                QMessageBox.critical(self.ui, "SFTP Error", f"Failed to upload config file: {e.stderr}")
                 self.ui.run_button.setEnabled(True)
                 self.ui.run_button.setText("Run OpenRAM")
                 return
 
-            sram_compiler_script = os.path.join(remote_path, "sram_compiler.py")
+            user_host, remote_openram_path = openram_path.split(':', 1)
+            sram_compiler_script = os.path.join(remote_openram_path, "sram_compiler.py")
+            remote_openram_activate_script = os.path.join(remote_openram_path, "openram_env", "bin", "activate")
+            remote_miniconda_activate_script = os.path.join(remote_openram_path, "miniconda", "bin", "activate")
+            remote_setpaths_script = os.path.join(remote_openram_path, "setpaths.sh")
+
             remote_command = f"""
-                cd {remote_path} && \
-                source openram_env/bin/activate && \
-                source miniconda/bin/activate && \
-                source setpaths.sh && \
-                python3 -u {sram_compiler_script} {remote_temp_config_path} && \
-                rm {remote_temp_config_path}
+                cd {remote_openram_path} && \
+                source {remote_openram_activate_script} && \
+                source {remote_miniconda_activate_script} && \
+                source {remote_setpaths_script} && \
+                python3 -u {sram_compiler_script} ~/{remote_temp_config_name} && \
+                rm ~/{remote_temp_config_name}
             """
 
-            self.remote_worker = RemoteRunWorker(ssh, remote_command)
-            self.remote_worker.log_message.connect(self._append_log)
-            self.remote_worker.finished.connect(self.on_run_finished)
-            
-            self.remote_thread = threading.Thread(target=self.remote_worker.run)
-            self.remote_thread.start()
+            ssh_command = [
+                "ssh",
+                "-i", os.path.join(os.path.dirname(__file__), "openram_key"),
+                f"{user}@{host}",
+                remote_command
+            ]
+
+            self.process = QProcess()
+            self.process.setProcessChannelMode(QProcess.MergedChannels)
+            self.process.readyReadStandardOutput.connect(self.on_output_ready)
+            self.process.finished.connect(lambda code, status: self.on_run_finished(code, status))
+            self.process.start("ssh", ssh_command[1:])
 
         else:  # Local execution
             sram_compiler_script = os.path.join(openram_path, "sram_compiler.py")
@@ -290,8 +223,6 @@ class Controller:
             self.temp_script_path = None
 
         self.process = None
-        self.remote_thread = None
-        self.remote_worker = None
 
     def view_gds(self):
         if not self.config_path:
@@ -311,12 +242,9 @@ class Controller:
             self.ui.log_output.append("Remote GDS: Downloading file...")
             QCoreApplication.processEvents()
 
-            ssh = self.get_ssh_client()
-            if not ssh:
-                return
-
             try:
                 user_host, remote_openram_path = openram_path.split(':', 1)
+                user, host = user_host.split('@', 1)
             except ValueError:
                 QMessageBox.critical(self.ui, "Error", "Invalid remote path format. Use user@host:/path/to/openram")
                 return
@@ -325,15 +253,16 @@ class Controller:
             list_gds_command = f'ls -1 {remote_output_path}/*.gds 2>/dev/null'
             
             try:
-                stdin, stdout, stderr = ssh.exec_command(list_gds_command)
-                gds_files_full_paths = stdout.read().decode().strip().split('\n')
+                ssh_command = ["ssh", "-i", os.path.join(os.path.dirname(__file__), "openram_key"), f"{user}@{host}", list_gds_command]
+                process = subprocess.run(ssh_command, check=True, capture_output=True, text=True)
+                gds_files_full_paths = process.stdout.strip().split('\n')
                 gds_files_full_paths = [f for f in gds_files_full_paths if f]
-                err = stderr.read().decode().strip()
+                err = process.stderr.strip()
                 if err:
                     QMessageBox.warning(self.ui, "Warning", f"Could not list remote GDS files: {err}")
                     return
-            except Exception as e:
-                QMessageBox.warning(self.ui, "Warning", f"Error listing remote GDS files: {e}")
+            except subprocess.CalledProcessError as e:
+                QMessageBox.warning(self.ui, "Warning", f"Error listing remote GDS files: {e.stderr}")
                 return
 
             if not gds_files_full_paths:
@@ -351,16 +280,15 @@ class Controller:
 
             if remote_gds_file_path:
                 try:
-                    sftp = ssh.open_sftp()
                     with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.gds') as tmp:
                         self.ui.log_output.append(f"Downloading {os.path.basename(remote_gds_file_path)} to temporary file...")
                         QCoreApplication.processEvents()
-                        sftp.get(remote_gds_file_path, tmp.name)
+                        scp_command = ["scp", "-i", os.path.join(os.path.dirname(__file__), "openram_key"), f"{user}@{host}:{remote_gds_file_path}", tmp.name]
+                        subprocess.run(scp_command, check=True)
                         gds_file_to_open = tmp.name
-                    sftp.close()
                     self.ui.log_output.append("Download complete.")
-                except Exception as e:
-                    QMessageBox.critical(self.ui, "SFTP Error", f"Failed to download GDS file: {e}")
+                except subprocess.CalledProcessError as e:
+                    QMessageBox.critical(self.ui, "SFTP Error", f"Failed to download GDS file: {e.stderr}")
                     return
         
         else:  # Local execution
@@ -382,12 +310,7 @@ class Controller:
         if gds_file_to_open:
             self.ui.log_output.append(f"Opening {gds_file_to_open} with KLayout...")
             command = f"klayout {gds_file_to_open}"
-            # We need to create a script to source the environment correctly, even for local KLayout
-            temp_script_path = self._create_temp_script(command)
-            if temp_script_path:
-                QProcess.startDetached("bash", [temp_script_path])
-                # Note: The temporary file downloaded from remote will be cleaned up by the OS eventually.
-                # For more robust cleanup, we could track it and delete it on application exit.
+            QProcess.startDetached("bash", ["-c", command])
 
     def view_output(self):
         if not self.config_path:
@@ -417,12 +340,9 @@ class Controller:
         source_path_for_download = ""
         
         if is_remote:
-            ssh = self.get_ssh_client()
-            if not ssh:
-                return
-
             try:
                 user_host, remote_openram_path = openram_path.split(':', 1)
+                user, host = user_host.split('@', 1)
                 remote_output_path = os.path.join(remote_openram_path, output_path_from_config)
                 source_path_for_download = remote_output_path
             except ValueError:
@@ -432,16 +352,17 @@ class Controller:
 
             list_files_command = f'ls -F {remote_output_path} 2>/dev/null'
             try:
-                stdin, stdout, stderr = ssh.exec_command(list_files_command)
-                files = stdout.read().decode().strip().split('\n')
-                err = stderr.read().decode().strip()
+                ssh_command = ["ssh", "-i", os.path.join(os.path.dirname(__file__), "openram_key"), f"{user}@{host}", list_files_command]
+                process = subprocess.run(ssh_command, check=True, capture_output=True, text=True)
+                files = process.stdout.strip().split('\n')
+                err = process.stderr.strip()
                 if err:
                      file_list.addItem(f"Could not list remote directory (or it's empty).")
                      file_list.addItem(f"Error: {err}")
                 else:
                     file_list.addItems([f for f in files if f])
-            except Exception as e:
-                file_list.addItem(f"Error listing remote files: {e}")
+            except subprocess.CalledProcessError as e:
+                file_list.addItem(f"Error listing remote files: {e.stderr}")
 
         else:  # Local execution
             source_path_for_download = output_path_from_config
@@ -496,7 +417,7 @@ class Controller:
         if os.path.exists(destination):
             reply = QMessageBox.question(self.ui, "Destination Exists",
                                            f"The destination '{destination}' already exists. Do you want to overwrite it?",
-                                           QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if reply == QMessageBox.Yes:
                 try:
                     if os.path.isfile(destination):
@@ -523,26 +444,15 @@ class Controller:
                 command = ["python3", os.path.join(os.path.dirname(__file__), "remote_downloader.py"),
                            source_path, destination, host, user]
 
-                if not self.ssh_password:
-                    password, ok = QInputDialog.getText(self.ui, "SSH Password", f"Enter password for {user}@{host}:", QLineEdit.Password)
-                    if not ok:
-                        self.ui.log_output.append("SSH password not provided. Download cancelled.")
-                        self.ui.download_button.setEnabled(True)
-                        self.ui.download_button.setText("Download Output Folder")
-                        return
-                    self.ssh_password = password
-                
+                command = ["python3", os.path.join(os.path.dirname(__file__), "remote_downloader.py"),
+                           source_path, destination, host, user]
+
                 # Start the external downloader process
                 self.download_process = QProcess()
                 self.download_process.setProcessChannelMode(QProcess.MergedChannels)
                 self.download_process.readyReadStandardOutput.connect(self._on_download_output_ready)
                 self.download_process.finished.connect(self.on_download_process_finished)
                 
-                environment = self.download_process.processEnvironment()
-                if self.ssh_password:
-                    environment.insert("SSH_PASSWORD", self.ssh_password)
-                self.download_process.setProcessEnvironment(environment)
-
                 self.ui.log_output.append(f"Starting remote download process: {' '.join(command)}")
                 self.download_process.start("python3", command[1:]) # Pass arguments as list
             except ValueError:
