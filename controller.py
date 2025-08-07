@@ -3,7 +3,7 @@ import shutil
 import subprocess
 import glob
 import tempfile
-from PySide6.QtWidgets import QMessageBox, QTextEdit, QInputDialog, QFileDialog, QVBoxLayout, QLabel, QListWidget,     QPushButton, QWidget, QHBoxLayout, QLineEdit
+from PySide6.QtWidgets import QMessageBox, QTextEdit, QInputDialog, QFileDialog, QVBoxLayout, QLabel, QListWidget,     QPushButton, QWidget, QHBoxLayout, QLineEdit, QTableWidget, QTableWidgetItem, QDialog, QHeaderView
 from PySide6.QtCore import QCoreApplication, QProcess, QObject, Signal, QThread
 
 from config_loader import _load_config_file
@@ -501,40 +501,24 @@ class Controller:
         self.ui.editor.setMinimumWidth(400)
         self.ui.scroll_area.setWidget(self.ui.editor)
 
-    def _get_file_properties_as_table(self, folder_path: str) -> str:
-        path = Path(folder_path)
+    def _view_config_popup(self, file_path):
+        try:
+            with open(file_path, 'r') as f:
+                content = f.read()
+            
+            dialog = QDialog(self.ui)
+            dialog.setWindowTitle(os.path.basename(file_path))
+            layout = QVBoxLayout(dialog)
+            
+            text_edit = QTextEdit()
+            text_edit.setReadOnly(True)
+            text_edit.setText(content)
+            layout.addWidget(text_edit)
+            
+            dialog.exec()
 
-        if not path.exists() or not path.is_dir():
-            return f"<p>Path '{folder_path}' does not exist or is not a directory.</p>"
-
-        # Gather all files with access time
-        files = []
-        for file in path.iterdir():
-            if file.is_file():
-                stats = file.stat()
-                files.append({
-                    "name": file.stem,
-                    "accessed": stats.st_atime,
-                    "modified": stats.st_mtime
-                })
-
-        # Sort by access time, descending, and take the last 3 accessed files
-        recent_files = sorted(files, key=lambda x: x["accessed"], reverse=True)[:3]
-
-        # Build HTML table
-        output = [
-            "<table border='1' cellpadding='5' cellspacing='0'>",
-            "<tr><th>Config Name</th><th>Last Accessed</th><th>Last Modified</th></tr>"
-        ]
-
-        for file in recent_files:
-            accessed = time.ctime(file["accessed"])
-            modified = time.ctime(file["modified"])
-            row = f"<tr><td>{file['name']}</td><td>{accessed}</td><td>{modified}</td></tr>"
-            output.append(row)
-
-        output.append("</table>")
-        return "\n".join(output)
+        except Exception as e:
+            QMessageBox.critical(self.ui, "Error", f"Failed to read config file: {e}")
 
     def show_home_screen(self):
         if self.ui.editor:
@@ -542,10 +526,17 @@ class Controller:
             self.ui.editor.deleteLater()
             self.ui.editor = None
 
-        home_text_edit = QTextEdit()
-        home_text_edit.setReadOnly(True)
-        home_content = "<br><b> Recent Activity </b><br>" + self._get_file_properties_as_table(USERS_CONFIG_DIR)
+        home_widget = QWidget()
+        layout = QVBoxLayout(home_widget)
 
+        # Recent Activity Table
+        activity_label = QLabel("<b>Recent Activity</b>")
+        layout.addWidget(activity_label)
+        
+        table = self._get_file_properties_as_table(USERS_CONFIG_DIR)
+        layout.addWidget(table)
+
+        # Advanced Settings
         advanced_config_content = ""
         try:
             advanced_config = _load_config_file(ADVANCED_CONFIG_FILE)
@@ -557,5 +548,48 @@ class Controller:
         except Exception as e:
             advanced_config_content = f"\n\nError loading advanced config: {e}"
 
-        home_text_edit.setHtml(home_content + advanced_config_content)
-        self.ui.scroll_area.setWidget(home_text_edit)
+        advanced_settings_label = QLabel(advanced_config_content)
+        layout.addWidget(advanced_settings_label)
+
+        self.ui.scroll_area.setWidget(home_widget)
+
+    def _get_file_properties_as_table(self, folder_path: str):
+        path = Path(folder_path)
+
+        if not path.exists() or not path.is_dir():
+            label = QLabel(f"Path '{folder_path}' does not exist or is not a directory.")
+            return label
+
+        # Gather all files with access time
+        files = []
+        for file in path.iterdir():
+            if file.is_file() and file.suffix == '.py':
+                stats = file.stat()
+                files.append({
+                    "name": file.stem,
+                    "path": str(file),
+                    "accessed": stats.st_atime,
+                    "modified": stats.st_mtime
+                })
+
+        # Sort by access time, descending, and take the last 3 accessed files
+        recent_files = sorted(files, key=lambda x: x["accessed"], reverse=True)[:3]
+
+        table = QTableWidget()
+        table.setColumnCount(4)
+        table.setHorizontalHeaderLabels(["Config Name", "Last Accessed", "Last Modified", "Actions"])
+        table.setRowCount(len(recent_files))
+
+        for i, file in enumerate(recent_files):
+            table.setItem(i, 0, QTableWidgetItem(file['name']))
+            table.setItem(i, 1, QTableWidgetItem(time.strftime('%d %b, %Y %H:%M:%S', time.localtime(file["accessed"]))))
+            table.setItem(i, 2, QTableWidgetItem(time.strftime('%d %b, %Y %H:%M:%S', time.localtime(file["modified"]))))
+            
+            view_button = QPushButton("View Config")
+            view_button.clicked.connect(lambda _, p=file["path"]: self._view_config_popup(p))
+            table.setCellWidget(i, 3, view_button)
+
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Stretch)
+
+        return table
