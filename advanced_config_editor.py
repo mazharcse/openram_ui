@@ -225,6 +225,22 @@ class AdvancedConfigEditor(QWidget):
             field_widget.setText(directory)
             self.set_modified()
             
+    def _sftp_mkdir_recursive(self, sftp, remote_path):
+        """Creates a remote directory recursively."""
+        current_path = ""
+        # Handle absolute paths by preserving the leading slash
+        if remote_path.startswith('/'):
+            current_path = '/'
+        
+        for part in remote_path.strip('/').split('/'):
+            if not part:
+                continue
+            current_path = os.path.join(current_path, part).replace("\\", "/")
+            try:
+                sftp.stat(current_path)
+            except FileNotFoundError:
+                sftp.mkdir(current_path)
+
     def upload_pdk_folder(self, list_widget: QListWidget):
         folder_path = QFileDialog.getExistingDirectory(
             self,
@@ -246,83 +262,90 @@ class AdvancedConfigEditor(QWidget):
         is_remote = '@' in openram_path and ':' in openram_path
 
         if is_remote:
+            client = None  # Initialize client to None
             try:
-                user_host, remote_openram_path = openram_path.split(':', 1)
+                user_host, remote_openram_path_raw = openram_path.split(':', 1)
                 user, host = user_host.split('@', 1)
-            except ValueError:
-                QMessageBox.critical(self, "Error", "Invalid remote path format. Use user@host:/path/to/openram")
-                return
 
-            ssh_key_path = os.path.join(os.path.dirname(__file__), "openram_key")
-            if not os.path.exists(ssh_key_path):
-                QMessageBox.critical(self, "Error", f"SSH key file not found: {ssh_key_path}")
-                return
+                ssh_key_path = os.path.join(os.path.dirname(__file__), "openram_key")
+                if not os.path.exists(ssh_key_path):
+                    QMessageBox.critical(self, "Error", f"SSH key file not found: {ssh_key_path}")
+                    return
 
-            try:
                 key = paramiko.RSAKey.from_private_key_file(ssh_key_path)
                 client = paramiko.SSHClient()
                 client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                 client.connect(host, username=user, pkey=key, timeout=5)
                 sftp = client.open_sftp()
 
+                # Resolve remote home directory
+                stdin, stdout, stderr = client.exec_command("echo $HOME")
+                remote_home = stdout.read().decode().strip()
+                
+                if remote_openram_path_raw.startswith('~/'):
+                    remote_openram_path = os.path.join(remote_home, remote_openram_path_raw[2:]).replace("\\", "/")
+                else:
+                    remote_openram_path = remote_openram_path_raw.replace("\\", "/")
+
+                remote_tech_base_path = os.path.join(remote_openram_path, TECHNOLOGY_PATH).replace("\\", "/")
+                remote_target_path = os.path.join(remote_tech_base_path, folder_name).replace("\\", "/")
+
                 # 1. Check if the folder exists and ask to overwrite
                 try:
                     sftp.stat(remote_target_path)
-                    # If stat succeeds, directory exists
                     reply = QMessageBox.question(self, "Folder Exists",
                                                    f"The remote technology '{folder_name}' already exists. Overwrite?",
                                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
                     if reply == QMessageBox.No:
-                        client.close()
                         return
-                    # If yes, remove the remote directory first
-                    stdin, stdout, stderr = client.exec_command(f'rm -rf {remote_target_path}')
+                    stdin, stdout, stderr = client.exec_command(f'rm -rf "{remote_target_path}"')
                     exit_status = stdout.channel.recv_exit_status()
                     if exit_status != 0:
                         raise Exception(f"Failed to remove remote directory: {stderr.read().decode()}")
                 except FileNotFoundError:
-                    # This is good, the directory doesn't exist
-                    pass
+                    pass # Good, it doesn't exist
 
-                # 2. Create the base directory and upload the folder recursively
-                try:
-                    sftp.stat(remote_tech_base_path)
-                except FileNotFoundError:
-                    sftp.mkdir(remote_tech_base_path)
-                
+                # 2. Recursively create directory structure and upload
                 QMessageBox.information(self, "Uploading", f"Uploading folder to {user_host}:{remote_target_path}")
                 
-                # Create top-level directory for the PDK
-                sftp.mkdir(remote_target_path)
+                self._sftp_mkdir_recursive(sftp, remote_target_path)
 
                 for dirpath, _, filenames in os.walk(folder_path):
-                    remote_dirpath = os.path.join(remote_target_path, os.path.relpath(dirpath, folder_path)).replace("\\", "/")
+                    rel_dir = os.path.relpath(dirpath, folder_path)
+                    if rel_dir == '.':
+                        remote_dir = remote_target_path
+                    else:
+                        remote_dir = os.path.join(remote_target_path, rel_dir).replace("\\", "/")
+                    
+                    self._sftp_mkdir_recursive(sftp, remote_dir)
+
                     for filename in filenames:
-                        local_file_path = os.path.join(dirpath, filename)
-                        remote_file_path = os.path.join(remote_dirpath, filename).replace("\\", "/")
-                        # Ensure remote subdirectory exists
-                        try:
-                            sftp.stat(remote_dirpath)
-                        except FileNotFoundError:
-                            sftp.mkdir(remote_dirpath)
-                        sftp.put(local_file_path, remote_file_path)
+                        local_file = os.path.join(dirpath, filename)
+                        remote_file = os.path.join(remote_dir, filename).replace("\\", "/")
+                        sftp.put(local_file, remote_file)
 
                 # 3. Update the remote technology.txt
                 remote_tech_file = os.path.join(remote_openram_path, os.path.basename(TECHNOLOGY_FILE))
-                append_command = f"grep -qxF '{folder_name}' {remote_tech_file} || echo '{folder_name}' >> {remote_tech_file}"
+                append_command = f"grep -qxF '{folder_name}' '{remote_tech_file}' || echo '{folder_name}' >> '{remote_tech_file}'"
                 stdin, stdout, stderr = client.exec_command(append_command)
                 exit_status = stdout.channel.recv_exit_status()
                 if exit_status != 0:
-                     raise Exception(f"Failed to update remote technology.txt: {stderr.read().decode()}")
+                     if "No such file" in stderr.read().decode():
+                         stdin, stdout, stderr = client.exec_command(f"echo '{folder_name}' > '{remote_tech_file}'")
+                         exit_status = stdout.channel.recv_exit_status()
+                         if exit_status != 0:
+                             raise Exception(f"Failed to create remote technology.txt: {stderr.read().decode()}")
+                     else:
+                        raise Exception(f"Failed to update remote technology.txt: {stderr.read().decode()}")
 
-                client.close()
                 QMessageBox.information(self, "Success", f"Folder uploaded to:\n{user_host}:{remote_target_path}")
                 self.populate_tech_list(list_widget)
                 self.set_modified()
 
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"An error occurred during the remote operation:\n{e}")
-                if 'client' in locals() and client.get_transport() and client.get_transport().is_active():
+            finally:
+                if client and client.get_transport() and client.get_transport().is_active():
                     client.close()
                 return
 
