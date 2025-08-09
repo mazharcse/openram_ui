@@ -139,18 +139,31 @@ class Controller:
                 self.ui.run_button.setText("Run OpenRAM")
                 return
 
-            remote_temp_config_name = os.path.basename(self.config_path)
+            remote_users_config_dir = os.path.join(remote_path, USERS_CONFIG_DIR)
+            remote_config_filename = os.path.basename(self.config_path)
+            remote_config_path = os.path.join(remote_users_config_dir, remote_config_filename)
+
+            # Create remote directory
+            mkdir_command = ["ssh", "-i", os.path.join(os.path.dirname(__file__), "openram_key"), f"{user}@{host}", f"mkdir -p {remote_users_config_dir}"]
+            try:
+                process = subprocess.run(mkdir_command, check=True, capture_output=True, text=True)
+                self.ui.log_output.append(f"Ensured remote directory exists: {remote_users_config_dir}")
+            except subprocess.CalledProcessError as e:
+                QMessageBox.critical(self.ui, "SSH Error", f"Failed to create remote directory: {e.stderr}")
+                self.ui.run_button.setEnabled(True)
+                self.ui.run_button.setText("Run OpenRAM")
+                return
             
             # Upload config file
             scp_command = [
                 "scp",
                 "-i", os.path.join(os.path.dirname(__file__), "openram_key"),
                 self.config_path,
-                f"{user}@{host}:{remote_temp_config_name}"
+                f"{user}@{host}:{remote_config_path}"
             ]
             try:
                 process = subprocess.run(scp_command, check=True, capture_output=True, text=True)
-                self.ui.log_output.append(f"Uploaded config to ~/{remote_temp_config_name}")
+                self.ui.log_output.append(f"Uploaded config to {remote_config_path}")
             except subprocess.CalledProcessError as e:
                 QMessageBox.critical(self.ui, "SFTP Error", f"Failed to upload config file: {e.stderr}")
                 self.ui.run_button.setEnabled(True)
@@ -168,8 +181,7 @@ class Controller:
                 source {remote_openram_activate_script} && \
                 source {remote_miniconda_activate_script} && \
                 source {remote_setpaths_script} && \
-                python3 -u {sram_compiler_script} ~/{remote_temp_config_name} && \
-                rm ~/{remote_temp_config_name}
+                python3 -u {sram_compiler_script} {remote_config_path}                 
             """
 
             ssh_command = [
