@@ -36,7 +36,7 @@ class AdvancedConfigEditor(QWidget):
                 browse_button = QPushButton("Browse")
                 browse_button.clicked.connect(lambda: self.browse_openram_path(field))
                 path_layout.addWidget(field)
-                path_layout.addWidget(browse_button)
+                # path_layout.addWidget(browse_button)
                 self.fields[key] = field
                 self.form.addRow(key, path_layout)
                 field.textChanged.connect(self.set_modified)
