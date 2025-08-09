@@ -25,6 +25,18 @@ class Controller:
         self.temp_script_path = None
         self.download_process = None
 
+    def _get_remote_user_host(self):
+        advanced_config = _load_config_file(ADVANCED_CONFIG_FILE)
+        openram_path = advanced_config.get("openram_path", "")
+        if '@' in openram_path and ':' in openram_path:
+            try:
+                user_host, remote_path = openram_path.split(':', 1)
+                user, host = user_host.split('@', 1)
+                return user, host, remote_path
+            except ValueError:
+                QMessageBox.critical(self.ui, "Error", "Invalid remote path format in advanced settings. Use user@host:/path/to/openram")
+                return None, None, None
+        return None, None, None
 
     def _create_temp_script(self, command_to_run):
         """Creates a temporary shell script to run a command in the OpenRAM environment."""
@@ -55,18 +67,56 @@ class Controller:
             return None
 
     def load_config(self):
+        user, host, remote_path = self._get_remote_user_host()
         dialog = LoadConfigDialog()
-        config_files = [f for f in os.listdir(USERS_CONFIG_DIR) if f.endswith(".py")]
-        dialog.list_widget.addItems([os.path.splitext(f)[0] for f in config_files])
+        display_name = None
+
+        if user and host:
+            remote_users_config_dir = os.path.join(remote_path, USERS_CONFIG_DIR)
+            # Ensure the remote directory exists
+            mkdir_command = ["ssh", "-i", os.path.join(os.path.dirname(__file__), "openram_key"), f"{user}@{host}", f"mkdir -p {remote_users_config_dir}"]
+            try:
+                subprocess.run(mkdir_command, check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e:
+                QMessageBox.critical(self.ui, "SSH Error", f"Failed to create remote directory: {e.stderr}")
+                return
+
+            # List files in the remote directory
+            ls_command = ["ssh", "-i", os.path.join(os.path.dirname(__file__), "openram_key"), f"{user}@{host}", f"ls {remote_users_config_dir}"]
+            try:
+                process = subprocess.run(ls_command, check=True, capture_output=True, text=True)
+                config_files = [f for f in process.stdout.strip().split('\n') if f.endswith(".py")]
+                dialog.list_widget.addItems([os.path.splitext(f)[0] for f in config_files])
+            except subprocess.CalledProcessError as e:
+                QMessageBox.critical(self.ui, "SSH Error", f"Failed to list remote config files: {e.stderr}")
+                return
+        else:
+            config_files = [f for f in os.listdir(USERS_CONFIG_DIR) if f.endswith(".py")]
+            dialog.list_widget.addItems([os.path.splitext(f)[0] for f in config_files])
 
         if dialog.exec():
             selected_config = dialog.get_selected_config()
-            self.config_path = os.path.join(USERS_CONFIG_DIR, f"{selected_config}.py")
+            if user and host:
+                display_name = selected_config
+                remote_users_config_dir = os.path.join(remote_path, USERS_CONFIG_DIR)
+                remote_config_path = os.path.join(remote_users_config_dir, f"{selected_config}.py")
+                
+                try:
+                    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.py') as tmp:
+                        scp_command = ["scp", "-i", os.path.join(os.path.dirname(__file__), "openram_key"), f"{user}@{host}:{remote_config_path}", tmp.name]
+                        subprocess.run(scp_command, check=True)
+                        self.config_path = tmp.name
+                except subprocess.CalledProcessError as e:
+                    QMessageBox.critical(self.ui, "SFTP Error", f"Failed to download config file: {e.stderr}")
+                    return
+            else:
+                self.config_path = os.path.join(USERS_CONFIG_DIR, f"{selected_config}.py")
+
             if self.ui.editor:
                 self.ui.scroll_area.takeWidget()
                 self.ui.editor.deleteLater()
                 self.ui.editor = None
-            self.ui.editor = ConfigEditor(self.config_path)
+            self.ui.editor = ConfigEditor(self.config_path, display_name=display_name)
             self.ui.editor.setMinimumWidth(400)
             self.ui.scroll_area.setWidget(self.ui.editor)
 
@@ -98,8 +148,22 @@ class Controller:
         if dialog.exec():
             config_name = dialog.get_config_name()
             if config_name:
-                path = os.path.join(USERS_CONFIG_DIR, f"{config_name}.py")
-                self.ui.editor.save_config(path)
+                user, host, remote_path = self._get_remote_user_host()
+                if user and host:
+                    remote_users_config_dir = os.path.join(remote_path, USERS_CONFIG_DIR)
+                    remote_config_path = os.path.join(remote_users_config_dir, f"{config_name}.py")
+                    
+                    try:
+                        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.py') as tmp:
+                            self.ui.editor.save_config(tmp.name)
+                            scp_command = ["scp", "-i", os.path.join(os.path.dirname(__file__), "openram_key"), tmp.name, f"{user}@{host}:{remote_config_path}"]
+                            subprocess.run(scp_command, check=True)
+                        QMessageBox.information(self.ui, "Save Complete", f"Configuration saved as {config_name} on the OpenRAM Server.")
+                    except subprocess.CalledProcessError as e:
+                        QMessageBox.critical(self.ui, "SFTP Error", f"Failed to upload config file: {e.stderr}")
+                else:
+                    path = os.path.join(USERS_CONFIG_DIR, f"{config_name}.py")
+                    self.ui.editor.save_config(path)
 
     def run_openram(self):
         if self.process and self.process.state() != QProcess.NotRunning:
@@ -130,11 +194,8 @@ class Controller:
         if is_remote:
             self.ui.log_output.append("Remote OpenRAM path detected.")
             
-            try:
-                user_host, remote_path = openram_path.split(':', 1)
-                user, host = user_host.split('@', 1)
-            except ValueError:
-                QMessageBox.critical(self.ui, "Error", "Invalid remote path format in advanced settings. Use user@host:/path/to/openram")
+            user, host, remote_path = self._get_remote_user_host()
+            if not user:
                 self.ui.run_button.setEnabled(True)
                 self.ui.run_button.setText("Run OpenRAM")
                 return
@@ -142,33 +203,6 @@ class Controller:
             remote_users_config_dir = os.path.join(remote_path, USERS_CONFIG_DIR)
             remote_config_filename = os.path.basename(self.config_path)
             remote_config_path = os.path.join(remote_users_config_dir, remote_config_filename)
-
-            # Create remote directory
-            mkdir_command = ["ssh", "-i", os.path.join(os.path.dirname(__file__), "openram_key"), f"{user}@{host}", f"mkdir -p {remote_users_config_dir}"]
-            try:
-                process = subprocess.run(mkdir_command, check=True, capture_output=True, text=True)
-                self.ui.log_output.append(f"Ensured remote directory exists: {remote_users_config_dir}")
-            except subprocess.CalledProcessError as e:
-                QMessageBox.critical(self.ui, "SSH Error", f"Failed to create remote directory: {e.stderr}")
-                self.ui.run_button.setEnabled(True)
-                self.ui.run_button.setText("Run OpenRAM")
-                return
-            
-            # Upload config file
-            scp_command = [
-                "scp",
-                "-i", os.path.join(os.path.dirname(__file__), "openram_key"),
-                self.config_path,
-                f"{user}@{host}:{remote_config_path}"
-            ]
-            try:
-                process = subprocess.run(scp_command, check=True, capture_output=True, text=True)
-                self.ui.log_output.append(f"Uploaded config to {remote_config_path}")
-            except subprocess.CalledProcessError as e:
-                QMessageBox.critical(self.ui, "SFTP Error", f"Failed to upload config file: {e.stderr}")
-                self.ui.run_button.setEnabled(True)
-                self.ui.run_button.setText("Run OpenRAM")
-                return
 
             user_host, remote_openram_path = openram_path.split(':', 1)
             sram_compiler_script = os.path.join(remote_openram_path, "sram_compiler.py")
@@ -612,3 +646,13 @@ class Controller:
         header.setSectionResizeMode(QHeaderView.Stretch)        
 
         return table
+
+    def show_about(self):
+        about_text = """
+        <h2>OpenRAM UI</h2>
+        <p>This is a graphical user interface for the OpenRAM memory compiler.</p>
+        <p>Version: 0.1</p>
+        <p>For more information, please visit the 
+        <a href='https://openram.org/'>OpenRAM website</a>.</p>
+        """
+        QMessageBox.about(self.ui, "About OpenRAM UI", about_text)
